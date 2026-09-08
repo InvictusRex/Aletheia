@@ -75,7 +75,28 @@ __all__ = [
     "DEFAULT_GEMINI_MODEL",
     "GeminiFactsProvider",
     "build_response_schema",
+    "sanitize_response_schema",
 ]
+
+
+def sanitize_response_schema(node: Any) -> Any:
+    """Recursively drop ``additionalProperties`` keys from a schema.
+
+    The Gemini Developer API rejects ``additionalProperties`` (it is only
+    supported in Enterprise Agent Platform mode), while Pydantic v2 emits
+    it on every object schema. This walk removes those keys at any depth
+    — nested objects, ``items``, ``$defs`` — and preserves all other
+    schema semantics. Returns a new structure; the input is not mutated.
+    """
+    if isinstance(node, dict):
+        return {
+            key: sanitize_response_schema(value)
+            for key, value in node.items()
+            if key != "additionalProperties"
+        }
+    if isinstance(node, list):
+        return [sanitize_response_schema(value) for value in node]
+    return node
 
 
 def build_response_schema() -> dict[str, Any]:
@@ -95,7 +116,7 @@ def build_response_schema() -> dict[str, Any]:
     }
     if defs:
         schema["$defs"] = defs
-    return schema
+    return sanitize_response_schema(schema)
 
 
 class _UnparseableOutput(Exception):

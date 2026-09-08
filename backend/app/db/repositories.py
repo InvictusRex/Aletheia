@@ -541,3 +541,93 @@ def list_all_facts(session: Session) -> list[Fact]:
     for link in link_rows:
         by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
     return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]
+
+
+def _hydrate_facts(session: Session, fact_rows: list[FactRow]) -> list[Fact]:
+    """Rebuild Fact models with evidence links (shared search helper)."""
+    fact_rows = sorted(fact_rows, key=lambda r: str(r.id))
+    if not fact_rows:
+        return []
+    fact_ids = [r.id for r in fact_rows]
+    link_rows = list(
+        session.scalars(
+            select(FactEvidenceRow)
+            .where(FactEvidenceRow.fact_id.in_(fact_ids))
+            .order_by(FactEvidenceRow.evidence_id)
+        ).all()
+    )
+    link_rows.sort(key=lambda r: (str(r.fact_id), str(r.evidence_id)))
+    by_fact: dict[UUID, list[UUID]] = {fid: [] for fid in fact_ids}
+    for link in link_rows:
+        by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
+    return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]
+
+
+def search_fact_rows_by_tokens(
+    session: Session,
+    tokens: list[str],
+    limit: int,
+    document_id: UUID | None = None,
+) -> list[Fact]:
+    """Lexical candidate pool: facts whose subject/predicate/value/unit
+    text matches ANY token (case-insensitive substring).
+
+    Broad recall prefilter — exact relevance is scored by the caller.
+    Ordered by fact id string, bounded by limit. Read-only.
+    """
+    if not tokens or limit <= 0:
+        return []
+    clauses = []
+    for token in tokens:
+        like = f"%{token}%"
+        clauses.append(FactRow.subject.ilike(like))
+        clauses.append(FactRow.predicate.ilike(like))
+        clauses.append(FactRow.value_text.ilike(like))
+        clauses.append(FactRow.unit.ilike(like))
+    stmt = select(FactRow).where(or_(*clauses)).order_by(FactRow.id).limit(limit)
+    if document_id is not None:
+        stmt = stmt.where(FactRow.document_id == document_id)
+    return _hydrate_facts(session, list(session.scalars(stmt).all()))
+
+
+def nearest_fact_ids_by_vector(
+    session: Session,
+    vector: list[float],
+    limit: int,
+    document_id: UUID | None = None,
+) -> list[tuple[UUID, float]]:
+    """Closest facts to a query vector as (fact_id, cosine_distance).
+
+    PostgreSQL uses pgvector ordering natively. Other dialects (SQLite
+    tests) fall back to Python cosine over stored embeddings; the import
+    is deferred to keep this module free of matching-layer dependencies
+    at load time. Read-only.
+    """
+    if limit <= 0:
+        return []
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        stmt = select(
+            FactEmbeddingRow.fact_id,
+            FactEmbeddingRow.embedding.cosine_distance(vector).label("distance"),
+        ).order_by("distance").limit(limit)
+        if document_id is not None:
+            stmt = stmt.join(FactRow, FactRow.id == FactEmbeddingRow.fact_id).where(
+                FactRow.document_id == document_id
+            )
+        return [(row[0], float(row[1])) for row in session.execute(stmt).all()]
+    from app.matching.embeddings import cosine_similarity
+
+    rows = list(
+        session.execute(
+            select(FactRow.id, FactRow.document_id).order_by(FactRow.id)
+        ).all()
+    )
+    if document_id is not None:
+        rows = [r for r in rows if r[1] == document_id]
+    stored = get_embeddings(session, [r[0] for r in rows])
+    scored = [
+        (fid, 1.0 - cosine_similarity(vector, vec))
+        for fid, vec in stored.items()
+    ]
+    scored.sort(key=lambda item: (item[1], str(item[0])))
+    return scored[:limit]
