@@ -101,6 +101,13 @@
       "rationale": "No binaries in git; starter PDFs manual-validation only via DATASET_DIR.",
       "status": "accepted",
       "title": "Test PDFs generated in-test via PyMuPDF"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-011-table-evidence",
+      "rationale": "TEXT preserved untouched; no schema change needed (meta/bbox columns already generic); gating avoids running pdfplumber on all pages.",
+      "status": "accepted",
+      "title": "Additive TABLE + TABLE_CELL evidence via pdfplumber with candidate gating"
     }
   ],
   "deviations_from_plan": [
@@ -112,13 +119,14 @@
     }
   ],
   "implementation_state": {
-    "phase": "phase-1-complete",
-    "testing": "pytest 27 passed (health, extraction, pipeline, documents API)",
+    "phase": "table-extraction-complete",
+    "testing": "pytest 39 passed (health, extraction, pipeline, documents API, tables)",
     "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
     "notes": [
       "Live backend-to-DB path still unverified: Docker daemon was down, so reachable:true and container build are untested.",
       "Starter PDFs define no /PageLabels, so source_page_number is None on real data (best-effort per plan).",
-      "Earnings-deck BAD pages are sparse/image slides flagged NEEDS_OCR for Phase 3 routing."
+      "FY24 annual-report excerpt (read-only): 100 pages COMPLETED, 4889 TEXT + 309 TABLE + 1291 TABLE_CELL; TEXT intact.",
+      "Unruled/borderless tables may evade candidate detection (deliberate scope limit, recorded limitation)."
     ]
   },
   "invariants": [
@@ -192,7 +200,7 @@
     {
       "id": "ingestion-pipeline",
       "path": "backend/app/extraction/pipeline.py",
-      "responsibility": "Pure bytes-to-bundle orchestration with explicit FAILED/PARTIAL handling.",
+      "responsibility": "Pure bytes-to-bundle orchestration with explicit FAILED/PARTIAL handling; adds table evidence additively, TEXT untouched.",
       "type": "component"
     },
     {
@@ -212,10 +220,16 @@
       "path": "backend/tests/",
       "responsibility": "Unit + API integration tests with in-test generated PDFs (no fixtures).",
       "type": "testing"
+    },
+    {
+      "id": "table-extractor",
+      "path": "backend/app/extraction/tables.py",
+      "responsibility": "pdfplumber structured tables behind PyMuPDF candidate gating; emits TABLE + TABLE_CELL evidence additively.",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "phase-1",
+    "current": "table-extraction",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -235,7 +249,6 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "phase-2-tables",
       "phase-3-ocr",
       "phase-4-fact-schema"
     ]
@@ -334,6 +347,21 @@
     {
       "source": "extraction-tests",
       "target": "documents-api",
+      "type": "covers"
+    },
+    {
+      "source": "ingestion-pipeline",
+      "target": "table-extractor",
+      "type": "invokes"
+    },
+    {
+      "source": "table-extractor",
+      "target": "evidence-models",
+      "type": "produces"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "table-extractor",
       "type": "covers"
     }
   ],

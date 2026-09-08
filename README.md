@@ -47,4 +47,6 @@ alembic -c backend/alembic.ini upgrade head
 
 Evidence model: every `EvidenceUnit` carries document ID, 0-based `pdf_page_number`, best-effort `source_page_number` (printed number, may be `None`), evidence type, text, bounding box, extraction method, and quality. Downstream phases consume this representation regardless of extractor.
 
+Table evidence: pages with detected tables additionally yield `TABLE` units (tab/newline grid rendering plus `table_index`, dimensions, and verbatim headers in `meta`) and `TABLE_CELL` units (raw cell text with `row`/`col` plus verbatim `column_header`/`row_header` context). Native `TEXT` evidence is always preserved alongside tables. Disable with `TABLES_ENABLED=false`.
+
 Full setup/architecture documentation lands in Phase 13 per `docs/PLAN.md`.

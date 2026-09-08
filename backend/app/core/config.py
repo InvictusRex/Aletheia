@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Configurable dataset location; starter datasets live outside the repo.
     dataset_dir: str = Field(default="../starter-datasets")
 
+    # Structured table evidence (PLAN §40). Kill-switch for table processing.
+    tables_enabled: bool = Field(default=True)
+
     # Phase 1 provenance-first PDF ingestion (PLAN §39): extraction quality routing.
     extraction_min_chars: int = Field(default=50)
     extraction_quality_threshold: float = Field(default=0.35)
