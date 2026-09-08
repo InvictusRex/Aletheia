@@ -150,6 +150,20 @@
       "rationale": "Deployment has no GPU; +cpu local-version pin makes CUDA resolution impossible; pip cache mount survives failed builds.",
       "status": "accepted",
       "title": "CPU-only PyTorch with cached builds"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "decision-018-gemini-schema",
+      "rationale": "Pydantic v2 emits additionalProperties which the Gemini Developer API rejects; recursive strip in build_response_schema with unit tests; live structured-output smoke test passed after the fix.",
+      "status": "accepted",
+      "title": "Gemini schema sanitization plus live validation"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "decision-019-search",
+      "rationale": "Independent lexical/vector discovery merged with deterministic scoring (Jaccard, max(0,1-distance), hybrid mean); no LLM in path; no vector index at prototype scale.",
+      "status": "accepted",
+      "title": "Retrieval-only POST /search without new infrastructure"
     }
   ],
   "deviations_from_plan": [
@@ -161,13 +175,14 @@
     }
   ],
   "implementation_state": {
-    "phase": "matching-complete",
-    "testing": "pytest 146 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching)",
-    "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live",
+    "phase": "backend-feature-complete",
+    "testing": "pytest 170 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching, llm-schema, search)",
+    "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live; no ANN index (exact scan at prototype scale)",
     "notes": [
-      "Live starter-evidence run: CORROBORATES 0.9 (127.0 vs 126.6 INR crore), CONTRADICTS 0.7 capped, 2x CONTEXTUAL_DIFFERENCE, 4 unrelated counted.",
-      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
-      "Rerun persists nothing new (ordered-pair dedup); same-document pairs never generated."
+      "Backend feature-complete for core assignment (Phases 0-10); frontend next.",
+      "Live Gemini structured-output smoke test passed after additionalProperties sanitizer fix.",
+      "Live POST /search verified: ranked facts with evidence/provenance, document filtering, read-only.",
+      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container."
     ]
   },
   "invariants": [
@@ -176,7 +191,9 @@
     "Context is checked before declaring contradiction.",
     "Missing information is never fabricated.",
     "Every relationship must be explainable and grounded in evidence.",
-    "Extraction failures are explicit (FAILED/PARTIAL with preserved evidence), never silent."
+    "Extraction failures are explicit (FAILED/PARTIAL with preserved evidence), never silent.",
+    "Search never mutates persisted knowledge.",
+    "Search never invokes an LLM."
   ],
   "nodes": [
     {
@@ -283,7 +300,7 @@
     {
       "id": "llm-provider",
       "path": "backend/app/llm/provider.py + gemini.py",
-      "responsibility": "Sync LLM transport abstraction; Gemini adapter on google-genai v2 with schema-constrained output, retries, lazy SDK.",
+      "responsibility": "Sync LLM transport abstraction; Gemini adapter on google-genai v2 with schema-constrained output, recursive additionalProperties sanitizer, retries, lazy SDK.",
       "type": "component"
     },
     {
@@ -339,10 +356,28 @@
       "path": "backend/app/db relationship rows + fact_embeddings + alembic rev f42014770cfa",
       "responsibility": "Ordered-pair unique relationships, embedding store with SQLite variant, pgvector on PostgreSQL.",
       "type": "component"
+    },
+    {
+      "id": "search-service",
+      "path": "backend/app/search/service.py",
+      "responsibility": "Retrieval-only knowledge search: independent lexical/vector discovery, deterministic merge/ranking, read-only, no LLM.",
+      "type": "component"
+    },
+    {
+      "id": "search-api",
+      "path": "backend/app/api/search.py",
+      "responsibility": "POST /search with SearchRequest/SearchResponse; 400 on blank query; returns facts with provenance.",
+      "type": "interface"
+    },
+    {
+      "id": "search-tests",
+      "path": "backend/tests/test_search.py + test_llm_schema.py",
+      "responsibility": "Search behavior/contract tests with faked embeddings; schema sanitizer unit tests; no network or keys.",
+      "type": "testing"
     }
   ],
   "phases": {
-    "current": "matching",
+    "current": "backend-feature-complete",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -362,8 +397,24 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "evaluation-demo"
-    ]
+      "phase-11-frontend",
+      "phase-12-evaluation",
+      "phase-13-demo"
+    ],
+    "completed_backend_phases": [
+      "phase-0",
+      "phase-1",
+      "phase-2",
+      "phase-3",
+      "phase-4",
+      "phase-5",
+      "phase-6",
+      "phase-7",
+      "phase-8",
+      "phase-9",
+      "phase-10"
+    ],
+    "next": "phase-11-frontend"
   },
   "relationships": [
     {
@@ -574,6 +625,46 @@
     {
       "source": "extraction-tests",
       "target": "relationship-reasoning",
+      "type": "covers"
+    },
+    {
+      "source": "fastapi-app",
+      "target": "search-api",
+      "type": "exposes"
+    },
+    {
+      "source": "search-api",
+      "target": "search-service",
+      "type": "invokes"
+    },
+    {
+      "source": "search-service",
+      "target": "candidate-discovery",
+      "type": "reuses"
+    },
+    {
+      "source": "search-service",
+      "target": "fact-persistence",
+      "type": "reads"
+    },
+    {
+      "source": "search-service",
+      "target": "relationship-persistence",
+      "type": "reads"
+    },
+    {
+      "source": "search-service",
+      "target": "persistence",
+      "type": "reads"
+    },
+    {
+      "source": "search-tests",
+      "target": "search-service",
+      "type": "covers"
+    },
+    {
+      "source": "search-tests",
+      "target": "search-api",
       "type": "covers"
     }
   ],
