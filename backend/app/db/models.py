@@ -163,3 +163,45 @@ DocumentRow.facts: Mapped[list["FactRow"]] = relationship(
     cascade="all, delete-orphan",
     passive_deletes=True,
 )
+
+
+from pgvector.sqlalchemy import Vector  # noqa: E402 -- appended for R-DB embeddings; existing imports above untouched
+
+
+class FactEmbeddingRow(Base):
+    """One 384-d embedding per fact (R-DB matching persistence)."""
+
+    __tablename__ = "fact_embeddings"
+
+    fact_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("facts.id", ondelete="CASCADE"), primary_key=True
+    )
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(384).with_variant(JSON, "sqlite"), nullable=False
+    )
+
+
+class RelationshipRow(Base):
+    """Persisted fact-pair relationship (enums stored as plain strings)."""
+
+    __tablename__ = "relationships"
+    __table_args__ = (
+        UniqueConstraint("fact_a_id", "fact_b_id"),
+        Index("ix_relationships_fact_a_id", "fact_a_id"),
+        Index("ix_relationships_fact_b_id", "fact_b_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    fact_a_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("facts.id", ondelete="CASCADE"), nullable=False
+    )
+    fact_b_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("facts.id", ondelete="CASCADE"), nullable=False
+    )
+    relationship_type: Mapped[str] = mapped_column(String, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    reasoning_metadata: Mapped[dict] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    status: Mapped[str] = mapped_column(String, nullable=False, default="RESOLVED")

@@ -136,6 +136,20 @@
       "rationale": "Comparison layer must receive ready-canonical values; canonical scales fixed per currency/family in code tables; FY stays dateless; uncertainty via flags with no schema change.",
       "status": "accepted",
       "title": "Deterministic canonical conversion without LLM or migration"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-016-matching",
+      "rationale": "Embeddings rank, structured fields decide; unknown passes through; uncertainty explicit via NEEDS_REVIEW; cross-document only.",
+      "status": "accepted",
+      "title": "Staged discovery plus deterministic precedence classification"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-017-cpu-torch",
+      "rationale": "Deployment has no GPU; +cpu local-version pin makes CUDA resolution impossible; pip cache mount survives failed builds.",
+      "status": "accepted",
+      "title": "CPU-only PyTorch with cached builds"
     }
   ],
   "deviations_from_plan": [
@@ -147,13 +161,13 @@
     }
   ],
   "implementation_state": {
-    "phase": "normalization-complete",
-    "testing": "pytest 123 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization)",
-    "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
+    "phase": "matching-complete",
+    "testing": "pytest 146 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching)",
+    "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live",
     "notes": [
-      "Canonical units: INR crore / USD,EUR,GBP million / million tonnes / fraction / percentage_point / cleaned counts.",
-      "Live POST normalize over validation doc: 27/27 normalized, reserved columns verified in PostgreSQL.",
-      "No migration: ae0679862c94 remains single head."
+      "Live starter-evidence run: CORROBORATES 0.9 (127.0 vs 126.6 INR crore), CONTRADICTS 0.7 capped, 2x CONTEXTUAL_DIFFERENCE, 4 unrelated counted.",
+      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
+      "Rerun persists nothing new (ordered-pair dedup); same-document pairs never generated."
     ]
   },
   "invariants": [
@@ -295,10 +309,40 @@
       "path": "backend/app/facts/normalization.py",
       "responsibility": "Deterministic value/unit/time/name canonicalization into reserved columns; flags-only uncertainty, no migration.",
       "type": "component"
+    },
+    {
+      "id": "candidate-discovery",
+      "path": "backend/app/matching/embeddings.py",
+      "responsibility": "MiniLM-384 ranking plus lexical fallback; scores order candidates only, never classify.",
+      "type": "component"
+    },
+    {
+      "id": "relationship-reasoning",
+      "path": "backend/app/matching/compare.py + service.py",
+      "responsibility": "Tri-state context comparison, tolerance-explicit numeric verdicts, frozen precedence classifier, staged orchestration.",
+      "type": "component"
+    },
+    {
+      "id": "relationship-llm",
+      "path": "backend/app/llm/judgment.py",
+      "responsibility": "Structured judgment for ambiguous pairs only; precomputed verdicts passed in, NEEDS_REVIEW fallback.",
+      "type": "component"
+    },
+    {
+      "id": "relationship-api",
+      "path": "backend/app/api/relationships.py",
+      "responsibility": "Explicit generation trigger plus filtered listing and provenance detail endpoints.",
+      "type": "interface"
+    },
+    {
+      "id": "relationship-persistence",
+      "path": "backend/app/db relationship rows + fact_embeddings + alembic rev f42014770cfa",
+      "responsibility": "Ordered-pair unique relationships, embedding store with SQLite variant, pgvector on PostgreSQL.",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "normalization",
+    "current": "matching",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -318,7 +362,7 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "matching-reasoning"
+      "evaluation-demo"
     ]
   },
   "relationships": [
@@ -495,6 +539,41 @@
     {
       "source": "extraction-tests",
       "target": "fact-normalization",
+      "type": "covers"
+    },
+    {
+      "source": "relationship-reasoning",
+      "target": "candidate-discovery",
+      "type": "invokes"
+    },
+    {
+      "source": "relationship-reasoning",
+      "target": "fact-models",
+      "type": "reads"
+    },
+    {
+      "source": "relationship-reasoning",
+      "target": "relationship-llm",
+      "type": "invokes"
+    },
+    {
+      "source": "relationship-api",
+      "target": "relationship-reasoning",
+      "type": "invokes"
+    },
+    {
+      "source": "relationship-api",
+      "target": "relationship-persistence",
+      "type": "persists-via"
+    },
+    {
+      "source": "relationship-persistence",
+      "target": "postgres-pgvector",
+      "type": "stores"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "relationship-reasoning",
       "type": "covers"
     }
   ],

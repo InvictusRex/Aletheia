@@ -350,3 +350,194 @@ def update_fact_normalization(session: Session, fact: Fact) -> bool:
     row.ambiguity_flags = list(fact.ambiguity_flags)
     session.flush()
     return True
+
+
+from sqlalchemy import or_  # noqa: E402 -- appended for R-DB; existing imports above untouched
+from app.db.models import FactEmbeddingRow, RelationshipRow  # noqa: E402 -- appended for R-DB; existing imports above untouched
+from app.models.relationship import Relationship  # noqa: E402 -- appended for R-DB; existing imports above untouched
+
+
+def _rel_type_str(rel: Relationship) -> str:
+    value = rel.relationship_type
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _rel_status_str(rel: Relationship) -> str:
+    value = rel.status
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _rel_type_filter_str(relationship_type: str | object) -> str:
+    return (
+        relationship_type.value  # type: ignore[union-attr]
+        if hasattr(relationship_type, "value")
+        else str(relationship_type)
+    )
+
+
+def _ordered_pair(a: UUID, b: UUID) -> tuple[UUID, UUID]:
+    """Return the pair id-string ordered for deterministic storage/lookup."""
+    return (a, b) if str(a) <= str(b) else (b, a)
+
+
+def _embedding_to_list(value: object) -> list[float]:
+    """Deserialize the embedding variant.
+
+    SQLite returns a plain JSON list; PostgreSQL returns a vector (or
+    numpy array). Handle both without importing engine specifics.
+    """
+    if isinstance(value, list):
+        return [float(x) for x in value]
+    try:
+        return [float(x) for x in list(value)]  # type: ignore[arg-type]
+    except TypeError:
+        return value  # type: ignore[return-value]
+
+
+def _rel_from_row(row: RelationshipRow) -> Relationship:
+    """Rebuild a :class:`Relationship` from its row (no evidence join)."""
+    return Relationship(
+        id=row.id,
+        fact_a_id=row.fact_a_id,
+        fact_b_id=row.fact_b_id,
+        relationship_type=row.relationship_type,  # type: ignore[arg-type]
+        confidence=row.confidence,
+        explanation=row.explanation,
+        reasoning_metadata=dict(row.reasoning_metadata)
+        if row.reasoning_metadata is not None
+        else {},
+        status=row.status,  # type: ignore[arg-type]
+    )
+
+
+def save_embedding(session: Session, fact_id: UUID, vector: list[float]) -> None:
+    """Persist (upsert) one embedding row for a fact.
+
+    Choice: ``session.merge`` upsert — replaces the existing row for the
+    fact when present, inserts otherwise. Single flush; the caller commits.
+    """
+    session.merge(FactEmbeddingRow(fact_id=fact_id, embedding=list(vector)))
+    session.flush()
+
+
+def get_embeddings(
+    session: Session, fact_ids: list[UUID]
+) -> dict[UUID, list[float]]:
+    """Load embeddings for the given facts, keyed by fact id.
+
+    Missing facts are simply absent from the result.
+    """
+    if not fact_ids:
+        return {}
+    rows = list(
+        session.scalars(
+            select(FactEmbeddingRow).where(
+                FactEmbeddingRow.fact_id.in_(fact_ids)
+            )
+        ).all()
+    )
+    return {r.fact_id: _embedding_to_list(r.embedding) for r in rows}
+
+
+def save_relationship(session: Session, rel: Relationship) -> None:
+    """Persist one relationship; the pair is id-string order-normalized.
+
+    Single flush; the caller commits.
+    """
+    fact_a_id, fact_b_id = _ordered_pair(rel.fact_a_id, rel.fact_b_id)
+    session.add(
+        RelationshipRow(
+            id=rel.id,
+            fact_a_id=fact_a_id,
+            fact_b_id=fact_b_id,
+            relationship_type=_rel_type_str(rel),
+            confidence=rel.confidence,
+            explanation=rel.explanation,
+            reasoning_metadata=dict(rel.reasoning_metadata)
+            if rel.reasoning_metadata is not None
+            else {},
+            status=_rel_status_str(rel),
+        )
+    )
+    session.flush()
+
+
+def relationship_exists(session: Session, a: UUID, b: UUID) -> bool:
+    """Return True when a relationship row exists for the pair (any order)."""
+    fact_a_id, fact_b_id = _ordered_pair(a, b)
+    row = session.scalars(
+        select(RelationshipRow).where(
+            RelationshipRow.fact_a_id == fact_a_id,
+            RelationshipRow.fact_b_id == fact_b_id,
+        )
+    ).first()
+    return row is not None
+
+
+def list_relationships_for_document(
+    session: Session,
+    document_id: UUID,
+    relationship_type: str | None = None,
+    min_confidence: float = 0.0,
+) -> list[Relationship]:
+    """List relationships touching a document's facts.
+
+    A relationship belongs to the document when EITHER fact side belongs
+    to it (join via ``FactRow``). Filters applied; deterministic order by
+    relationship id string.
+    """
+    fact_ids_stmt = select(FactRow.id).where(FactRow.document_id == document_id)
+    stmt = select(RelationshipRow).where(
+        or_(
+            RelationshipRow.fact_a_id.in_(fact_ids_stmt),
+            RelationshipRow.fact_b_id.in_(fact_ids_stmt),
+        )
+    )
+    if relationship_type is not None:
+        stmt = stmt.where(
+            RelationshipRow.relationship_type
+            == _rel_type_filter_str(relationship_type)
+        )
+    if min_confidence:
+        stmt = stmt.where(RelationshipRow.confidence >= min_confidence)
+    stmt = stmt.order_by(RelationshipRow.id)
+    rows = list(session.scalars(stmt).all())
+    # Ensure id-string ordering for determinism.
+    rows.sort(key=lambda r: str(r.id))
+    return [_rel_from_row(r) for r in rows]
+
+
+def get_relationship(session: Session, rel_id: UUID) -> Relationship | None:
+    """Load a single relationship by id, or ``None`` if missing.
+
+    Evidence/facts are loaded separately by callers — no join here.
+    """
+    row = session.get(RelationshipRow, rel_id)
+    if row is None:
+        return None
+    return _rel_from_row(row)
+
+
+def list_all_facts(session: Session) -> list[Fact]:
+    """List every fact in the database with evidence links.
+
+    Ordered by fact id string for determinism. Cross-document candidate
+    pool for matching; filters apply in the service layer.
+    """
+    fact_rows = list(session.scalars(select(FactRow).order_by(FactRow.id)).all())
+    fact_rows.sort(key=lambda r: str(r.id))
+    if not fact_rows:
+        return []
+    fact_ids = [r.id for r in fact_rows]
+    link_rows = list(
+        session.scalars(
+            select(FactEvidenceRow)
+            .where(FactEvidenceRow.fact_id.in_(fact_ids))
+            .order_by(FactEvidenceRow.evidence_id)
+        ).all()
+    )
+    link_rows.sort(key=lambda r: (str(r.fact_id), str(r.evidence_id)))
+    by_fact: dict[UUID, list[UUID]] = {fid: [] for fid in fact_ids}
+    for link in link_rows:
+        by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
+    return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]

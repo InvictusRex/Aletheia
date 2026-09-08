@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     fact_llm_timeout_s: int = Field(default=60)
     fact_llm_max_retries: int = Field(default=2)
 
+    # Candidate discovery + relationship reasoning (deterministic-first).
+    matching_top_k: int = Field(default=10)
+    matching_similarity_floor: float = Field(default=0.25)
+    matching_numeric_tolerance: float = Field(default=0.01)
+    matching_embedding_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2"
+    )
+
     # Local OCR fallback (PaddleOCR): no credentials, no cloud calls.
     # Enabled by default; the pipeline auto-disables OCR at runtime when
     # the engine or its model weights are unavailable.

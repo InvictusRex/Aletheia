@@ -22,9 +22,22 @@ from app.models.fact import (
     ValueKind,
 )
 from app.models.page import Page, QualityVerdict
+from app.models.relationship import (
+    CandidatePair,
+    ContextComparison,
+    DimensionVerdict,
+    NumericVerdict,
+    Relationship,
+    RelationshipJudgment,
+    RelationshipStatus,
+    RelationshipType,
+)
 
 __all__ = [
+    "CandidatePair",
     "ChunkUnit",
+    "ContextComparison",
+    "DimensionVerdict",
     "Document",
     "EstimateStatus",
     "EvidenceChunk",
@@ -35,8 +48,13 @@ __all__ = [
     "FactDraft",
     "FactStatus",
     "IngestionStatus",
+    "NumericVerdict",
     "Page",
     "QualityVerdict",
+    "Relationship",
+    "RelationshipJudgment",
+    "RelationshipStatus",
+    "RelationshipType",
     "TimeKind",
     "ValueKind",
     "make_evidence_id",
