@@ -22,10 +22,10 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://aletheia:aletheia@db:5432/aletheia"
     )
 
-    # Future LLM extension point. Safe placeholder only.
-    llm_provider: str = Field(default="gemini")
-    gemini_api_key: str = Field(default="")
-    gemini_model: str = Field(default="gemini-3.5-flash")
+    # LLM provider (Groq, OpenAI-compatible). Safe placeholders only.
+    llm_provider: str = Field(default="groq")
+    groq_api_key: str = Field(default="")
+    groq_model: str = Field(default="openai/gpt-oss-120b")
 
     # Fact extraction bounds (evidence-scoped LLM calls only).
     fact_chunk_max_chars: int = Field(default=6000)

@@ -1,7 +1,7 @@
 """LLM judgment for deterministic-ambiguous pairs (task R-LLM).
 
 Frozen rules:
-- Gemini is used only for deterministic-ambiguous pairs selected by an
+- The LLM is used only for deterministic-ambiguous pairs selected by an
   earlier stage. Unrelated pairs never reach the LLM.
 - Never send PDFs/documents — only two structured facts, precomputed
   verdicts, and bounded excerpts.
@@ -30,12 +30,12 @@ from app.models.relationship import (
     RelationshipJudgment,
 )
 
-DEFAULT_JUDGMENT_MODEL = "gemini-3.5-flash"
+DEFAULT_JUDGMENT_MODEL = "openai/gpt-oss-120b"
 
 _SDK_INSTALL_GUIDANCE = (
-    "The 'google-genai' SDK is not installed. Install it with "
-    "'pip install google-genai' and provide a Gemini API key to use "
-    "GeminiJudgmentTransport."
+    "The 'groq' SDK is not installed. Install it with "
+    "'pip install groq' and provide a Groq API key to use "
+    "GroqJudgmentTransport."
 )
 
 _RAW_SNIPPET_LIMIT = 500
@@ -51,7 +51,7 @@ _ALLOWED_TYPES = frozenset(
 
 __all__ = [
     "DEFAULT_JUDGMENT_MODEL",
-    "GeminiJudgmentTransport",
+    "GroqJudgmentTransport",
     "JudgmentTransport",
     "build_judgment_prompt",
     "judge_pair",
@@ -298,11 +298,13 @@ def parse_judgment(raw_text: str) -> RelationshipJudgment:
     )
 
 
-class GeminiJudgmentTransport:
-    """Gemini text transport for judgment prompts.
+class GroqJudgmentTransport:
+    """Groq text transport for judgment prompts.
 
     The constructor stores parameters only (no client construction, no
-    network). All SDK surface lives in :meth:`complete_text`.
+    network). All SDK surface lives in :meth:`complete_text`. Output is
+    parsed as free-form JSON by :func:`parse_judgment` (same contract as
+    before — structured enforcement happens in validation, not here).
     """
 
     def __init__(
@@ -327,52 +329,70 @@ class GeminiJudgmentTransport:
 
         Raises:
             ValueError: on an empty prompt (caller bug, not retried).
-            LLMUnavailableError: when the ``google-genai`` SDK is missing.
+            LLMUnavailableError: when the ``groq`` SDK is missing.
             LLMTimeoutError: when SDK calls time out on every attempt.
             LLMTransportError: when SDK calls fail or return empty text
-                on every attempt.
+                on every attempt, or immediately on deterministic 4xx
+                failures (auth, bad request, permission, not-found).
         """
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
 
         try:
-            from google import genai  # lazy: module import must never need the SDK
+            from groq import (
+                APITimeoutError,
+                AuthenticationError,
+                BadRequestError,
+                Groq,
+                NotFoundError,
+                PermissionDeniedError,
+            )
         except ImportError as exc:
             raise LLMUnavailableError(_SDK_INSTALL_GUIDANCE) from exc
 
-        config = {"response_mime_type": "text/plain"}
-        client = genai.Client(api_key=self._api_key)
+        client = Groq(api_key=self._api_key)
 
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             last = attempt >= attempts
             try:
                 # Single SDK call site in this module.
-                response = client.models.generate_content(
+                response = client.chat.completions.create(
                     model=self._model,
-                    contents=prompt,
-                    config=config,
+                    messages=[{"role": "user", "content": prompt}],
+                    timeout=self._timeout_s,
                 )
-            except TimeoutError as exc:
+            except (APITimeoutError, TimeoutError) as exc:
                 if last:
                     raise LLMTimeoutError(
-                        f"Gemini judgment request timed out after {attempts} "
+                        f"Groq judgment request timed out after {attempts} "
                         f"attempt(s) (model={self._model})."
                     ) from exc
                 continue
+            except (
+                AuthenticationError,
+                BadRequestError,
+                PermissionDeniedError,
+                NotFoundError,
+            ) as exc:
+                raise LLMTransportError(
+                    f"Groq judgment deterministic API error, not retried "
+                    f"(model={self._model}): {exc}"
+                ) from exc
             except Exception as exc:
                 if last:
                     raise LLMTransportError(
-                        f"Gemini judgment transport/API error after {attempts} "
+                        f"Groq judgment transport/API error after {attempts} "
                         f"attempt(s) (model={self._model}): {exc}"
                     ) from exc
                 continue
-            text = getattr(response, "text", "")
+            text = getattr(getattr(response, "choices", [None])[0], "message", None)
+            text = getattr(text, "content", "") if text is not None else ""
             if not isinstance(text, str) or not text.strip():
-                exc: Exception = LLMTransportError("Gemini returned empty text.")
+                exc: Exception = LLMTransportError("Groq returned empty text.")
                 if last:
                     raise LLMTransportError(
-                        f"Gemini judgment returned empty text after {attempts} "
+                        f"Groq judgment returned empty text after {attempts} "
                         f"attempt(s) (model={self._model})."
                     ) from exc
                 continue

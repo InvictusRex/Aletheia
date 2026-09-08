@@ -33,7 +33,7 @@ from app.db.repositories import (
 from app.extraction.pipeline import run_ingestion
 from app.facts.service import FactExtractionReport, extract_facts_for_document
 from app.facts.validator import build_fact, parse_number, parse_time, resolve_kind
-from app.llm.gemini import DEFAULT_GEMINI_MODEL, GeminiFactsProvider
+from app.llm.groq import DEFAULT_GROQ_MODEL, GroqFactsProvider
 from app.llm.provider import FactExtractionBatch, LLMProvider, LLMTransportError
 from app.models import (
     ChunkUnit,
@@ -498,8 +498,9 @@ def test_service_fact_links_exact_table_cell_id(db_session):
 
 
 def test_api_post_facts_503_without_key(api_client, db_session, monkeypatch):
-    monkeypatch.setattr(settings, "gemini_api_key", "")
-    assert settings.llm_provider == "gemini"
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "groq_api_key", "")
+    assert settings.llm_provider == "groq"
     pdf = _make_text_pdf([SYNTHETIC_TEXT])
     document, _, _ = _ingest(db_session, "api-503.pdf", pdf)
 
@@ -558,17 +559,15 @@ def test_api_facts_404_on_unknown_document(api_client):
 # ---------------------------------------------------------------------------
 
 
-def test_gemini_default_model_name():
-    assert DEFAULT_GEMINI_MODEL == "gemini-3.5-flash"
-    assert "2.0-flash" not in DEFAULT_GEMINI_MODEL
-    assert "1.5" not in DEFAULT_GEMINI_MODEL
-    provider = GeminiFactsProvider(api_key="construct-only-key")
-    assert provider.model_name == "gemini-3.5-flash"
+def test_groq_default_model_name():
+    assert DEFAULT_GROQ_MODEL == "openai/gpt-oss-120b"
+    provider = GroqFactsProvider(api_key="construct-only-key")
+    assert provider.model_name == "openai/gpt-oss-120b"
     assert isinstance(provider, LLMProvider)
 
 
-def test_gemini_custom_model_reflected_and_carried_by_batches():
-    provider = GeminiFactsProvider(
+def test_groq_custom_model_reflected_and_carried_by_batches():
+    provider = GroqFactsProvider(
         api_key="construct-only-key", model="custom-model-x"
     )
     assert provider.model_name == "custom-model-x"

@@ -534,7 +534,8 @@ def test_fiscal_year_vs_calendar_never_corroborates():
 
 
 def test_ambiguous_pair_without_llm_is_provisional(db_session, monkeypatch):
-    monkeypatch.setattr(settings, "gemini_api_key", "")
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "groq_api_key", "")
     doc_a, doc_b = uuid4(), uuid4()
     fact_a, fact_b = _ambiguous_pair(doc_a, doc_b)
     _t, _c, _e, _m, needs_llm = classify(fact_a, fact_b)

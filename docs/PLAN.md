@@ -540,9 +540,7 @@ The LLM is used for semantic tasks, not as the entire reasoning engine.
 
 Primary LLM:
 
-- Gemini API — Free Tier
-
-The Jio/consumer Gemini subscription does NOT provide developer API benefits, so the project will use the Gemini API free tier.
+- Groq API (`openai/gpt-oss-120b`) via its OpenAI-compatible endpoint
 
 The implementation must remain provider-agnostic.
 
@@ -550,7 +548,7 @@ The implementation must remain provider-agnostic.
 
 # 10. LLM Responsibilities
 
-Gemini should be used for:
+The LLM should be used for:
 
 ## 10.1 Fact Extraction
 
@@ -571,7 +569,7 @@ Example:
 ```
 Evidence
    ↓
-Gemini
+LLM provider
    ↓
 Structured JSON
    ↓
@@ -614,7 +612,7 @@ canonical_predicate = revenue_from_services
 
 ## 10.4 Ambiguous Relationship Reasoning
 
-Gemini may be used when deterministic logic cannot confidently determine why two facts differ.
+The LLM may be used when deterministic logic cannot confidently determine why two facts differ.
 
 Example:
 
@@ -622,9 +620,9 @@ Example:
 Fact A
 +
 Fact B
-↓
-Gemini
-↓
+  ↓
+LLM provider
+  ↓
 Contextual difference
 ```
 
@@ -672,7 +670,7 @@ LLM responses must be constrained to structured output.
 Preferred pipeline:
 
 ```
-Gemini
+Groq provider
    ↓
 Structured JSON
    ↓
@@ -693,16 +691,16 @@ If the model produces malformed output:
 
 ---
 
-# 13. Gemini Provider Abstraction
+# 13. Groq Provider Abstraction
 
-Do not tightly couple the entire application to Gemini.
+Do not tightly couple the entire application to Groq.
 
 Use an abstraction such as:
 
 ```
 LLMProvider
     │
-    ├── GeminiProvider
+    ├── GroqProvider
     ├── OpenAIProvider       (future)
     └── LocalProvider        (future)
 ```
@@ -737,43 +735,43 @@ The exact interface can evolve.
 Environment configuration should look conceptually like:
 
 ```
-LLM_PROVIDER=gemini
-GEMINI_API_KEY=
+LLM_PROVIDER=groq
+GROQ_API_KEY=
 ```
 
 Never commit API keys.
 
 ---
 
-# 14. Gemini Usage Strategy
+# 14. LLM Usage Strategy
 
-Because the project uses the Gemini API free tier, token efficiency matters.
+Token efficiency matters when calling a hosted LLM API.
 
 Do NOT:
 
 ```
 100-page PDF
     ↓
-Gemini
+LLM provider
 ```
 
 Instead:
 
 ```
 PDF
- ↓
+  ↓
 Local extraction
- ↓
+  ↓
 Evidence units
- ↓
+  ↓
 Relevant evidence
- ↓
-Gemini
+  ↓
+LLM provider
 ```
 
-Use Gemini selectively.
+Use the LLM selectively.
 
-High-volume/simple tasks should use the most cost-efficient suitable Gemini model available.
+High-volume/simple tasks should use the most cost-efficient suitable model available.
 
 More complex reasoning can use a stronger model when necessary and when the available API limits permit it.
 
@@ -1610,7 +1608,7 @@ The fact extractor must not accidentally associate a value with the wrong year.
 
 # 41. Fact Extraction Strategy
 
-The extraction prompt should instruct Gemini to:
+The extraction prompt should instruct the LLM to:
 
 - Extract only facts supported by supplied evidence.
 - Never invent missing values.
@@ -1638,7 +1636,7 @@ The system must follow this invariant:
 No evidence → no fact.
 ```
 
-If Gemini claims something that cannot be traced to supplied evidence:
+If the LLM claims something that cannot be traced to supplied evidence:
 
 ```
 Reject / mark invalid
@@ -1989,7 +1987,7 @@ fact-knowledge-layer/
 │   │   │
 │   │   ├── llm/
 │   │   │   ├── provider.py
-│   │   │   └── gemini.py
+│   │   │   └── groq.py
 │   │   │
 │   │   ├── embeddings/
 │   │   │   └── service.py
@@ -2129,11 +2127,11 @@ Definition of done:
 
 All downstream components can rely on stable structured models.
 
-## Phase 5 — Gemini Fact Extraction
+## Phase 5 — LLM Fact Extraction
 
 Implement:
 
-- Gemini provider,
+- Groq provider,
 - structured extraction prompt,
 - Pydantic validation,
 - retries,
@@ -2144,9 +2142,9 @@ Definition of done:
 
 ```
 Evidence
- ↓
-Gemini
- ↓
+  ↓
+LLM provider
+  ↓
 Validated Facts
 ```
 
@@ -2218,7 +2216,7 @@ Implement:
 
 - deterministic relationship classification,
 - ambiguity detection,
-- Gemini reasoning for ambiguous cases,
+- LLM reasoning for ambiguous cases,
 - relationship explanation,
 - confidence.
 
@@ -2389,7 +2387,7 @@ How to:
 - start PostgreSQL,
 - start backend,
 - start frontend,
-- optionally configure Gemini.
+- optionally configure Groq (GROQ_API_KEY).
 
 ## Run
 
@@ -2424,7 +2422,7 @@ Explain why:
 - PyMuPDF,
 - pdfplumber,
 - PaddleOCR fallback,
-- Gemini,
+- Groq (openai/gpt-oss-120b),
 - Sentence Transformers,
 - PostgreSQL,
 - pgvector.
@@ -2524,7 +2522,7 @@ Do not use an LLM for arithmetic or obvious comparisons.
 
 **Principle 4 — LLM for Semantics**
 
-Use Gemini where language understanding is actually required.
+Use the LLM where language understanding is actually required.
 
 **Principle 5 — Embeddings for Discovery**
 
@@ -2581,7 +2579,7 @@ Avoid infrastructure that does not solve a demonstrated problem.
 Do NOT build:
 
 ```
-PDF → Gemini → answer
+PDF → LLM → answer
 ```
 
 Do NOT build:
@@ -2624,15 +2622,15 @@ Do NOT allow unsupported LLM claims to become facts.
 | Tables | pdfplumber |
 | OCR | Local PaddleOCR fallback |
 | Evidence | Canonical Evidence Layer |
-| Fact extraction | Gemini |
+| Fact extraction | Groq (openai/gpt-oss-120b) |
 | Structured output | Pydantic |
 | Numeric normalization | Deterministic Python |
 | Time normalization | Deterministic Python |
-| Entity normalization | Gemini + deterministic cleanup |
-| Predicate normalization | Gemini |
+| Entity normalization | LLM + deterministic cleanup |
+| Predicate normalization | LLM |
 | Candidate matching | Sentence Transformers + pgvector |
 | Final comparison | Deterministic rules |
-| Ambiguous reasoning | Gemini |
+| Ambiguous reasoning | Groq (openai/gpt-oss-120b) |
 | Storage | PostgreSQL |
 | Vector search | pgvector |
 | API | FastAPI |
@@ -2674,10 +2672,9 @@ The final system should conceptually look like:
                                    │
                                    ▼
                     ┌──────────────────────────────┐
-                    │       Fact Extraction        │
-                    │                              │
-                    │        Gemini API            │
-                    │       + Pydantic             │
+                     │       Fact Extraction        │
+                     │                              │
+                     │      Groq API + Pydantic     │
                     └──────────────┬───────────────┘
                                    │
                                    ▼
@@ -2711,9 +2708,9 @@ The final system should conceptually look like:
                  Deterministic          Ambiguous
                    reasoning             reasoning
                          │                   │
-                         │                   ▼
-                         │              Gemini API
-                         │                   │
+                          │                   ▼
+                          │               Groq API
+                          │                   │
                          └─────────┬─────────┘
                                    │
                                    ▼
@@ -2747,7 +2744,7 @@ The project is considered complete when all of the following are true:
 - [ ] OCR fallback exists for problematic pages.
 - [ ] Evidence Units are created.
 - [ ] Evidence contains provenance.
-- [ ] Facts are extracted with Gemini.
+- [ ] Facts are extracted with Groq.
 - [ ] Facts are validated using Pydantic.
 - [ ] Facts retain evidence IDs.
 - [ ] Values are normalized.
@@ -2755,7 +2752,7 @@ The project is considered complete when all of the following are true:
 - [ ] Embeddings are generated.
 - [ ] Candidate fact pairs are discovered.
 - [ ] Relationships are classified.
-- [ ] Ambiguous relationships can use Gemini reasoning.
+- [ ] Ambiguous relationships can use LLM reasoning.
 - [ ] Relationship explanations are stored.
 - [ ] Results are persisted in PostgreSQL.
 

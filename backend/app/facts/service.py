@@ -15,7 +15,7 @@ from app.db.repositories import get_document_bundle, save_facts
 from app.facts.chunking import build_chunks
 from app.facts.prompts import build_extraction_prompt
 from app.facts.validator import build_fact
-from app.llm.gemini import GeminiFactsProvider
+from app.llm.groq import GroqFactsProvider
 from app.llm.provider import LLMError, LLMProvider
 from app.models import Fact
 
@@ -37,18 +37,18 @@ def get_llm_provider() -> LLMProvider | None:
     Extraction stays optional: missing keys, unknown providers, or a
     missing SDK disable the layer without affecting ingestion.
     """
-    if settings.llm_provider != "gemini":
+    if settings.llm_provider != "groq":
         logger.warning(
             "unknown LLM provider %r: fact extraction disabled",
             settings.llm_provider,
         )
         return None
-    if not settings.gemini_api_key:
-        logger.info("no GEMINI_API_KEY: fact extraction unavailable")
+    if not settings.groq_api_key:
+        logger.info("no GROQ_API_KEY: fact extraction unavailable")
         return None
-    return GeminiFactsProvider(
-        api_key=settings.gemini_api_key,
-        model=settings.gemini_model,
+    return GroqFactsProvider(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
         timeout_s=settings.fact_llm_timeout_s,
         max_retries=settings.fact_llm_max_retries,
     )

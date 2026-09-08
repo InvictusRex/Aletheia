@@ -567,8 +567,9 @@ def test_search_never_touches_llm_layer(db_session, monkeypatch):
     assert not hasattr(svc, "get_llm_provider")
 
     # Functional: retrieval works with no API key configured.
-    monkeypatch.setattr(settings, "gemini_api_key", "")
-    assert settings.llm_provider == "gemini"
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "groq_api_key", "")
+    assert settings.llm_provider == "groq"
     doc_a, ev_a, _, _ = _ingest_two_docs(db_session)
     target = _fact(doc_a.id, ev_a[0].id, "Harbor bridge span")
     _save(db_session, [target])

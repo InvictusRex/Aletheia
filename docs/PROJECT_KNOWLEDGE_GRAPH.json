@@ -164,6 +164,13 @@
       "rationale": "Independent lexical/vector discovery merged with deterministic scoring (Jaccard, max(0,1-distance), hybrid mean); no LLM in path; no vector index at prototype scale.",
       "status": "accepted",
       "title": "Retrieval-only POST /search without new infrastructure"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "decision-020-groq",
+      "rationale": "Gemini abandoned: OpenAI-compatible API with strict structured outputs; Pydantic schemas mechanically converted (additionalProperties:false, required-all, inlined refs); lazy SDK, bounded retries, no behavior change elsewhere.",
+      "status": "accepted",
+      "title": "Groq provider replacing Gemini"
     }
   ],
   "deviations_from_plan": [
@@ -180,9 +187,9 @@
     "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live; no ANN index (exact scan at prototype scale)",
     "notes": [
       "Backend feature-complete for core assignment (Phases 0-10); frontend next.",
-      "Live Gemini structured-output smoke test passed after additionalProperties sanitizer fix.",
       "Live POST /search verified: ranked facts with evidence/provenance, document filtering, read-only.",
-      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container."
+      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
+      "LLM provider is Groq (openai/gpt-oss-120b); live fact + judgment smoke tests passed."
     ]
   },
   "invariants": [
@@ -299,8 +306,8 @@
     },
     {
       "id": "llm-provider",
-      "path": "backend/app/llm/provider.py + gemini.py",
-      "responsibility": "Sync LLM transport abstraction; Gemini adapter on google-genai v2 with schema-constrained output, recursive additionalProperties sanitizer, retries, lazy SDK.",
+      "path": "backend/app/llm/provider.py + groq.py",
+      "responsibility": "Sync LLM transport abstraction; Groq adapter on the groq SDK with strict JSON Schema output, retries, lazy SDK.",
       "type": "component"
     },
     {
@@ -342,7 +349,7 @@
     {
       "id": "relationship-llm",
       "path": "backend/app/llm/judgment.py",
-      "responsibility": "Structured judgment for ambiguous pairs only; precomputed verdicts passed in, NEEDS_REVIEW fallback.",
+      "responsibility": "Structured judgment for ambiguous pairs only; precomputed verdicts passed in, NEEDS_REVIEW fallback. Transport now Groq.",
       "type": "component"
     },
     {

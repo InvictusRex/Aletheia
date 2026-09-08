@@ -21,7 +21,7 @@ from app.db.repositories import (
     save_embedding,
     save_relationship,
 )
-from app.llm.judgment import GeminiJudgmentTransport, judge_pair
+from app.llm.judgment import GroqJudgmentTransport, judge_pair
 from app.llm.provider import LLMError
 from app.matching.compare import classify, compare_context, compare_numeric
 from app.matching.embeddings import (
@@ -64,20 +64,20 @@ def get_fact_embedder() -> FactEmbedder | None:
     return embedder
 
 
-def get_judgment_transport() -> GeminiJudgmentTransport | None:
+def get_judgment_transport() -> GroqJudgmentTransport | None:
     """Resolve the LLM judgment transport, or None without credentials."""
-    if settings.llm_provider != "gemini":
+    if settings.llm_provider != "groq":
         logger.warning(
             "unknown LLM provider %r: relationship judgment disabled",
             settings.llm_provider,
         )
         return None
-    if not settings.gemini_api_key:
-        logger.info("no GEMINI_API_KEY: relationship judgment unavailable")
+    if not settings.groq_api_key:
+        logger.info("no GROQ_API_KEY: relationship judgment unavailable")
         return None
-    return GeminiJudgmentTransport(
-        api_key=settings.gemini_api_key,
-        model=settings.gemini_model,
+    return GroqJudgmentTransport(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
         timeout_s=settings.fact_llm_timeout_s,
         max_retries=settings.fact_llm_max_retries,
     )
@@ -171,7 +171,7 @@ def run_matching_for_document(
     session: Session,
     document_id: str,
     embedder: FactEmbedder | None = None,
-    transport: GeminiJudgmentTransport | None = None,
+    transport: GroqJudgmentTransport | None = None,
 ) -> MatchingReport:
     """Discover candidates for one document's facts and classify them."""
     pool = list_all_facts(session)
@@ -245,7 +245,7 @@ def run_matching_for_document(
                         rtype = judgment.relationship_type
                         confidence = judgment.confidence
                         explanation = judgment.explanation
-                        metadata["llm_model"] = settings.gemini_model
+                        metadata["llm_model"] = settings.groq_model
             rel = Relationship(
                 fact_a_id=a_id,
                 fact_b_id=b_id,

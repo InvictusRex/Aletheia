@@ -18,5 +18,5 @@ pdfplumber>=0.11,<1
 paddleocr>=3,<4
 paddlepaddle>=3.0,<4
 sentence-transformers>=3,<4
-google-genai>=2,<3
+groq>=0.37,<2
 alembic>=1.14,<2
