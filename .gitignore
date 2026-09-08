@@ -1,0 +1,19 @@
+# Secrets / local env (allow .env.example)
+.env
+.env.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Tooling / OS / IDE
+.ruff_cache/
+.mypy_cache/
+.vscode/
+.idea/
+.DS_Store/
