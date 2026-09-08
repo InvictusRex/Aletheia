@@ -31,5 +31,9 @@ class Settings(BaseSettings):
     # Configurable dataset location; starter datasets live outside the repo.
     dataset_dir: str = Field(default="../starter-datasets")
 
+    # Phase 1 provenance-first PDF ingestion (PLAN §39): extraction quality routing.
+    extraction_min_chars: int = Field(default=50)
+    extraction_quality_threshold: float = Field(default=0.35)
+
 
 settings = Settings()
