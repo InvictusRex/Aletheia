@@ -108,6 +108,13 @@
       "rationale": "TEXT preserved untouched; no schema change needed (meta/bbox columns already generic); gating avoids running pdfplumber on all pages.",
       "status": "accepted",
       "title": "Additive TABLE + TABLE_CELL evidence via pdfplumber with candidate gating"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-012-local-ocr",
+      "rationale": "No cloud calls or credentials; provider abstraction keeps the engine replaceable; Docker pre-warms weights; hermetic auto-disable keeps tests deterministic.",
+      "status": "accepted",
+      "title": "Local PaddleOCR fallback instead of cloud OCR"
     }
   ],
   "deviations_from_plan": [
@@ -119,14 +126,14 @@
     }
   ],
   "implementation_state": {
-    "phase": "table-extraction-complete",
-    "testing": "pytest 39 passed (health, extraction, pipeline, documents API, tables)",
+    "phase": "ocr-fallback-complete",
+    "testing": "pytest 53 passed (health, extraction, pipeline, documents API, tables, OCR)",
     "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
     "notes": [
-      "Live backend-to-DB path still unverified: Docker daemon was down, so reachable:true and container build are untested.",
-      "Starter PDFs define no /PageLabels, so source_page_number is None on real data (best-effort per plan).",
-      "FY24 annual-report excerpt (read-only): 100 pages COMPLETED, 4889 TEXT + 309 TABLE + 1291 TABLE_CELL; TEXT intact.",
-      "Unruled/borderless tables may evade candidate detection (deliberate scope limit, recorded limitation)."
+      "Live backend-to-DB path verified: /health reachable:true; starter PDF ingested and persisted (4889 TEXT + 309 TABLE + 1291 TABLE_CELL).",
+      "Real PaddleOCR smoke passed in-container: image-only page read exactly with bbox; native IMAGE marker preserved alongside OCR_TEXT.",
+      "oneDNN/MKLDNN disabled at PaddleOCR construction (verified kwarg plumbing); plain CPU kernels used.",
+      "Docker image rebuilt with paddleocr 3.7.0 + paddlepaddle 3.3.1 + libgl1/libgomp1/libglib2.0-0; models pre-warmed at build."
     ]
   },
   "invariants": [
@@ -153,7 +160,7 @@
     {
       "id": "settings",
       "path": "backend/app/core/config.py",
-      "responsibility": "pydantic-settings environment config: database URL, LLM/AWS placeholders, dataset dir.",
+      "responsibility": "pydantic-settings environment config: database URL, LLM placeholder, local OCR and table toggles, dataset dir.",
       "type": "component"
     },
     {
@@ -226,10 +233,16 @@
       "path": "backend/app/extraction/tables.py",
       "responsibility": "pdfplumber structured tables behind PyMuPDF candidate gating; emits TABLE + TABLE_CELL evidence additively.",
       "type": "component"
+    },
+    {
+      "id": "ocr-fallback",
+      "path": "backend/app/extraction/ocr_provider.py + paddle_ocr.py",
+      "responsibility": "Local PaddleOCR fallback behind OcrProvider protocol; BAD pages only, native preserved, OCR_TEXT appended; oneDNN disabled (Paddle CPU PIR incompatibility).",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "table-extraction",
+    "current": "ocr-fallback",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -249,8 +262,8 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "phase-3-ocr",
-      "phase-4-fact-schema"
+      "fact-schema",
+      "gemini-extraction"
     ]
   },
   "relationships": [
@@ -362,6 +375,21 @@
     {
       "source": "extraction-tests",
       "target": "table-extractor",
+      "type": "covers"
+    },
+    {
+      "source": "ingestion-pipeline",
+      "target": "ocr-fallback",
+      "type": "invokes"
+    },
+    {
+      "source": "ocr-fallback",
+      "target": "evidence-models",
+      "type": "produces"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "ocr-fallback",
       "type": "covers"
     }
   ],

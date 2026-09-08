@@ -14,8 +14,10 @@ from hashlib import sha256
 from uuid import uuid4
 
 from app.core.config import settings
+from app.extraction.ocr_provider import OcrError, OcrProvider
+from app.extraction.paddle_ocr import PaddleOCRProvider, paddle_ocr_available
 from app.extraction.pymupdf import extract_pdf
-from app.extraction.quality import assess_quality
+from app.extraction.quality import assess_quality, needs_ocr
 from app.extraction.tables import StructuredTable, extract_tables
 from app.models import (
     Document,
@@ -29,6 +31,43 @@ from app.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Short failure categories for OCR page-error suffixes.
+_OCR_ERROR_CATEGORIES = {
+    "OcrUnavailableError": "unavailable",
+    "OcrInitError": "init",
+    "OcrModelMissingError": "models",
+    "OcrRuntimeError": "runtime",
+    "OcrMalformedError": "malformed",
+}
+
+
+def get_ocr_provider() -> OcrProvider | None:
+    """Resolve the configured OCR provider, or None when unavailable.
+
+    Never raises for missing engines/models: unavailability is a normal
+    outcome (tests, model-less environments) and ingestion continues
+    with native evidence alone.
+    """
+    if not settings.ocr_enabled:
+        return None
+    if settings.ocr_provider != "paddleocr":
+        logger.warning(
+            "unknown OCR provider %r: OCR disabled", settings.ocr_provider
+        )
+        return None
+    available, reason = paddle_ocr_available(
+        lang=settings.ocr_language,
+        allow_model_download=settings.ocr_allow_model_download,
+    )
+    if not available:
+        logger.info("OCR unavailable: %s", reason)
+        return None
+    return PaddleOCRProvider(
+        lang=settings.ocr_language,
+        dpi=settings.ocr_dpi,
+        allow_model_download=settings.ocr_allow_model_download,
+    )
 
 
 def _grid_text(headers: list[str], table: StructuredTable) -> str:
@@ -161,6 +200,8 @@ def run_ingestion(
         except ValueError as exc:
             logger.warning("table extraction skipped for %s: %s", filename, exc)
 
+    ocr_provider = get_ocr_provider()
+
     for pe in extracted:
         if pe.error is not None and not pe.blocks:
             failed += 1
@@ -180,22 +221,21 @@ def run_ingestion(
         score, verdict = assess_quality(
             pe.char_count, pe.word_count, pe.suspicious_ratio, pe.has_images
         )
-        pages.append(
-            Page(
-                document_id=document_id,
-                pdf_page_number=pe.pdf_page_number,
-                source_page_number=pe.source_page_number,
-                width=pe.width,
-                height=pe.height,
-                char_count=pe.char_count,
-                word_count=pe.word_count,
-                suspicious_ratio=pe.suspicious_ratio,
-                has_images=pe.has_images,
-                extraction_quality=score,
-                quality_verdict=verdict,
-                error=pe.error,
-            )
+        page = Page(
+            document_id=document_id,
+            pdf_page_number=pe.pdf_page_number,
+            source_page_number=pe.source_page_number,
+            width=pe.width,
+            height=pe.height,
+            char_count=pe.char_count,
+            word_count=pe.word_count,
+            suspicious_ratio=pe.suspicious_ratio,
+            has_images=pe.has_images,
+            extraction_quality=score,
+            quality_verdict=verdict,
+            error=pe.error,
         )
+        pages.append(page)
         for block in pe.blocks:
             evidence.append(
                 EvidenceUnit(
@@ -248,6 +288,57 @@ def run_ingestion(
                 document_id, table, score, table_index_counter
             )
             evidence.extend(table_units)
+
+        # OCR fallback: BAD pages only, native evidence always preserved.
+        # Failed native pages short-circuit above (no geometry to render).
+        ocr_index = table_index_counter
+        if ocr_provider is not None and needs_ocr(page.quality_verdict):
+            try:
+                ocr_result = ocr_provider.extract_page(
+                    data, pe.pdf_page_number
+                )
+            except OcrError as exc:
+                category = _OCR_ERROR_CATEGORIES.get(
+                    type(exc).__name__, "failed"
+                )
+                detail = f"ocr:{category}: {exc}"
+                page.error = f"{page.error}; {detail}" if page.error else detail
+                logger.warning(
+                    "OCR failed on page %d of %s: %s",
+                    pe.pdf_page_number,
+                    filename,
+                    exc,
+                )
+            else:
+                for block in ocr_result.blocks:
+                    evidence.append(
+                        EvidenceUnit(
+                            id=make_evidence_id(
+                                document_id,
+                                pe.pdf_page_number,
+                                ocr_index,
+                                EvidenceType.OCR_TEXT,
+                            ),
+                            document_id=document_id,
+                            pdf_page_number=pe.pdf_page_number,
+                            source_page_number=pe.source_page_number,
+                            type=EvidenceType.OCR_TEXT,
+                            text=block.text,
+                            bbox=block.bbox,
+                            extraction_method=ExtractionMethod.PADDLEOCR,
+                            extraction_quality=(
+                                block.confidence
+                                if block.confidence is not None
+                                else score
+                            ),
+                            meta={
+                                "provider": ocr_result.provider,
+                                "trigger": "BAD verdict",
+                                "retries": 0,
+                            },
+                        )
+                    )
+                    ocr_index += 1
 
     if failed == 0:
         status = IngestionStatus.COMPLETED

@@ -19,7 +19,10 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-local}
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      AWS_REGION: ${AWS_REGION:-}
+      OCR_ENABLED: ${OCR_ENABLED:-true}
+      OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr}
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:

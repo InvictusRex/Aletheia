@@ -9,4 +9,6 @@ psycopg[binary]>=3.2,<4
 pgvector>=0.3,<0.4
 pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
+paddleocr>=3,<4
+paddlepaddle>=3.0,<4
 alembic>=1.14,<2

@@ -331,9 +331,11 @@ Revenue FY24 FY23 81,415 ...
 
 ### OCR
 
-- AWS Textract
+- Local PaddleOCR (CPU)
 
-Textract is an OCR fallback, not the default parser.
+PaddleOCR is an OCR fallback, not the default parser. It runs locally —
+no cloud calls, no credentials — behind the OCR provider abstraction so
+the engine can be replaced later.
 
 Pipeline:
 
@@ -349,7 +351,7 @@ Extraction Quality Check
 GOOD            BAD
  │               │
  ↓               ↓
-Continue       Textract
+Continue       PaddleOCR
 ```
 
 Do not OCR every page unnecessarily.
@@ -366,7 +368,7 @@ Every downstream component should consume the same canonical evidence representa
 
 - PyMuPDF,
 - pdfplumber,
-- Textract.
+- PaddleOCR.
 
 Do not independently send outputs from all three tools into downstream systems and attempt to merge duplicates later.
 
@@ -377,7 +379,7 @@ PyMuPDF ────────┐
                 │
 pdfplumber ─────┼──→ Canonical Evidence Layer
                 │
-Textract ───────┘
+PaddleOCR ──────┘
 ```
 
 ## 5.1 EvidenceUnit
@@ -1558,7 +1560,7 @@ Use native extraction
 If not:
 
 ```
-Route page to Textract
+Route page to PaddleOCR
 ```
 
 The routing threshold should be configurable.
@@ -1966,8 +1968,8 @@ fact-knowledge-layer/
 │   │   ├── extraction/
 │   │   │   ├── pymupdf.py
 │   │   │   ├── tables.py
-│   │   │   ├── textract.py
-│   │   │   └── router.py
+│   │   │   ├── paddle_ocr.py
+│   │   │   ├── ocr_provider.py
 │   │   │
 │   │   ├── facts/
 │   │   │   ├── extractor.py
@@ -2102,7 +2104,7 @@ Evidence
 Implement:
 
 - extraction quality checks,
-- Textract integration,
+- PaddleOCR integration,
 - routing logic,
 - OCR evidence,
 - failure handling.
@@ -2387,8 +2389,7 @@ How to:
 - start PostgreSQL,
 - start backend,
 - start frontend,
-- optionally configure Gemini,
-- optionally configure Textract.
+- optionally configure Gemini.
 
 ## Run
 
@@ -2422,7 +2423,7 @@ Explain why:
 
 - PyMuPDF,
 - pdfplumber,
-- Textract fallback,
+- PaddleOCR fallback,
 - Gemini,
 - Sentence Transformers,
 - PostgreSQL,
@@ -2621,7 +2622,7 @@ Do NOT allow unsupported LLM claims to become facts.
 |---------|----------|
 | PDF text/layout | PyMuPDF |
 | Tables | pdfplumber |
-| OCR | AWS Textract fallback |
+| OCR | Local PaddleOCR fallback |
 | Evidence | Canonical Evidence Layer |
 | Fact extraction | Gemini |
 | Structured output | Pydantic |
@@ -2660,7 +2661,7 @@ The final system should conceptually look like:
                     │                              │
                     │ PyMuPDF → native extraction │
                     │ pdfplumber → tables         │
-                    │ Textract → OCR fallback     │
+                     │ PaddleOCR → OCR fallback    │
                     └──────────────┬───────────────┘
                                    │
                                    ▼

@@ -1,8 +1,8 @@
 """Canonical EvidenceUnit (PLAN Section 5).
 
-Extractor-agnostic: PyMuPDF today, pdfplumber/Textract later — all must
-produce this representation. Provenance fields are mandatory; layout
-information (bbox) is preserved, never flattened away.
+Extractor-agnostic: PyMuPDF and pdfplumber today, local PaddleOCR
+fallback — all must produce this representation. Provenance fields are
+mandatory; layout information (bbox) is preserved, never flattened away.
 """
 
 from enum import Enum
@@ -29,6 +29,7 @@ class ExtractionMethod(str, Enum):
     PYMUPDF = "PYMUPDF"
     PDFPLUMBER = "PDFPLUMBER"
     TEXTRACT = "TEXTRACT"
+    PADDLEOCR = "PADDLEOCR"
 
 
 class EvidenceUnit(BaseModel):

@@ -66,3 +66,13 @@ def assess_quality(
         else QualityVerdict.BAD
     )
     return score, verdict
+
+
+def needs_ocr(verdict: QualityVerdict) -> bool:
+    """Whether a page's verdict routes it to OCR fallback.
+
+    Literal PLAN routing: any BAD verdict triggers OCR. GOOD pages
+    never do. The caller additionally requires an available provider;
+    this predicate is purely verdict-driven and document-agnostic.
+    """
+    return verdict == QualityVerdict.BAD

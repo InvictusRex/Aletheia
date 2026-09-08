@@ -22,11 +22,18 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://aletheia:aletheia@db:5432/aletheia"
     )
 
-    # Future extension points (Phase 3/5). Safe placeholders only.
+    # Future LLM extension point. Safe placeholder only.
     llm_provider: str = Field(default="gemini")
     gemini_api_key: str = Field(default="")
-    aws_region: str = Field(default="")
-    textract_role_arn: str = Field(default="")
+
+    # Local OCR fallback (PaddleOCR): no credentials, no cloud calls.
+    # Enabled by default; the pipeline auto-disables OCR at runtime when
+    # the engine or its model weights are unavailable.
+    ocr_enabled: bool = Field(default=True)
+    ocr_provider: str = Field(default="paddleocr")
+    ocr_language: str = Field(default="en")
+    ocr_allow_model_download: bool = Field(default=False)
+    ocr_dpi: int = Field(default=200)
 
     # Configurable dataset location; starter datasets live outside the repo.
     dataset_dir: str = Field(default="../starter-datasets")

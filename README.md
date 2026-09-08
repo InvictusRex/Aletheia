@@ -49,4 +49,6 @@ Evidence model: every `EvidenceUnit` carries document ID, 0-based `pdf_page_numb
 
 Table evidence: pages with detected tables additionally yield `TABLE` units (tab/newline grid rendering plus `table_index`, dimensions, and verbatim headers in `meta`) and `TABLE_CELL` units (raw cell text with `row`/`col` plus verbatim `column_header`/`row_header` context). Native `TEXT` evidence is always preserved alongside tables. Disable with `TABLES_ENABLED=false`.
 
+OCR fallback: pages whose native extraction quality verdict is `BAD` are additionally processed with local PaddleOCR (CPU, no cloud calls, no credentials). Successful OCR appends `OCR_TEXT` units with provider/trigger metadata; native evidence is always preserved and OCR failures never fail ingestion. The Docker image pre-warms model weights at build time; oneDNN/MKLDNN is intentionally disabled in the OCR engine because the current PaddlePaddle CPU oneDNN path cannot execute the OCR model kernels. Disable with `OCR_ENABLED=false`.
+
 Full setup/architecture documentation lands in Phase 13 per `docs/PLAN.md`.
