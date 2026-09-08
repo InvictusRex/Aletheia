@@ -101,3 +101,65 @@ class EvidenceUnitRow(Base):
     meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     document: Mapped[DocumentRow] = relationship(back_populates="evidence_units")
+
+
+from datetime import date  # noqa: E402 -- appended for FactRow date hints; existing imports above untouched
+from sqlalchemy import Date  # noqa: E402 -- appended for FactRow Date columns; existing import block untouched
+
+
+class FactRow(Base):
+    __tablename__ = "facts"
+    __table_args__ = (
+        Index("ix_facts_document_id", "document_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    subject: Mapped[str] = mapped_column(String, nullable=False)
+    canonical_subject: Mapped[str | None] = mapped_column(String, nullable=True)
+    predicate: Mapped[str] = mapped_column(String, nullable=False)
+    canonical_predicate: Mapped[str | None] = mapped_column(String, nullable=True)
+    value_kind: Mapped[str] = mapped_column(String, nullable=False)
+    value_text: Mapped[str] = mapped_column(Text, nullable=False)
+    value_number: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    normalized_number: Mapped[float | None] = mapped_column(Float, nullable=True)
+    normalized_unit: Mapped[str | None] = mapped_column(String, nullable=True)
+    time_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    time_kind: Mapped[str] = mapped_column(String, nullable=False, default="UNKNOWN")
+    time_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    time_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    scope_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    estimate_status: Mapped[str] = mapped_column(
+        String, nullable=False, default="UNKNOWN"
+    )
+    geography: Mapped[str | None] = mapped_column(String, nullable=True)
+    context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    extraction_confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    ambiguity_flags: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+
+    document: Mapped[DocumentRow] = relationship(back_populates="facts")
+
+
+class FactEvidenceRow(Base):
+    __tablename__ = "fact_evidence"
+
+    fact_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("facts.id", ondelete="CASCADE"), primary_key=True
+    )
+    evidence_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("evidence_units.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+# Corresponding collection on DocumentRow. Assigned post-hoc so the existing
+# DocumentRow definition above is preserved byte-for-byte.
+DocumentRow.facts: Mapped[list["FactRow"]] = relationship(
+    "FactRow",
+    back_populates="document",
+    cascade="all, delete-orphan",
+    passive_deletes=True,
+)

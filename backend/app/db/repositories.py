@@ -165,3 +165,169 @@ def get_document_bundle(
         for r in ev_rows
     ]
     return document, pages, evidence
+
+
+from app.db.models import FactEvidenceRow, FactRow  # noqa: E402 -- appended; existing imports above untouched
+from app.models.fact import Fact  # noqa: E402 -- appended; existing imports above untouched
+
+
+def _value_kind_str(fact: Fact) -> str:
+    value = fact.value_kind
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _time_kind_str(fact: Fact) -> str:
+    value = fact.time_kind
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _estimate_status_str(fact: Fact) -> str:
+    value = fact.estimate_status
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _fact_status_str(fact: Fact) -> str:
+    value = fact.status
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _fact_from_row(row: FactRow, evidence_ids: list[UUID]) -> Fact:
+    """Rebuild a :class:`Fact` from a row plus its ordered evidence ids."""
+    return Fact(
+        id=row.id,
+        document_id=row.document_id,
+        subject=row.subject,
+        canonical_subject=row.canonical_subject,
+        predicate=row.predicate,
+        canonical_predicate=row.canonical_predicate,
+        value_kind=row.value_kind,  # type: ignore[arg-type]
+        value_text=row.value_text,
+        value_number=row.value_number,
+        unit=row.unit,
+        normalized_number=row.normalized_number,
+        normalized_unit=row.normalized_unit,
+        time_text=row.time_text,
+        time_kind=row.time_kind,  # type: ignore[arg-type]
+        time_start=row.time_start,
+        time_end=row.time_end,
+        scope_text=row.scope_text,
+        estimate_status=row.estimate_status,  # type: ignore[arg-type]
+        geography=row.geography,
+        context=dict(row.context) if row.context is not None else {},
+        evidence_ids=evidence_ids,
+        extraction_confidence=row.extraction_confidence,
+        ambiguity_flags=list(row.ambiguity_flags)
+        if row.ambiguity_flags is not None
+        else [],
+        status=row.status,  # type: ignore[arg-type]
+    )
+
+
+def save_facts(session: Session, facts: list[Fact]) -> None:
+    """Persist facts plus fact-evidence link rows.
+
+    Adds all rows with a single flush; the caller commits.
+
+    NOTE: the ``fact_evidence`` link table is unordered, so input order of
+    ``evidence_ids`` cannot be preserved relationally. Retrieval
+    (:func:`list_facts_for_document`, :func:`get_fact`) orders
+    ``evidence_ids`` by evidence id string for determinism.
+    """
+    fact_rows = [
+        FactRow(
+            id=f.id,
+            document_id=f.document_id,
+            subject=f.subject,
+            canonical_subject=f.canonical_subject,
+            predicate=f.predicate,
+            canonical_predicate=f.canonical_predicate,
+            value_kind=_value_kind_str(f),
+            value_text=f.value_text,
+            value_number=f.value_number,
+            unit=f.unit,
+            normalized_number=f.normalized_number,
+            normalized_unit=f.normalized_unit,
+            time_text=f.time_text,
+            time_kind=_time_kind_str(f),
+            time_start=f.time_start,
+            time_end=f.time_end,
+            scope_text=f.scope_text,
+            estimate_status=_estimate_status_str(f),
+            geography=f.geography,
+            context=dict(f.context) if f.context is not None else {},
+            extraction_confidence=f.extraction_confidence,
+            ambiguity_flags=list(f.ambiguity_flags)
+            if f.ambiguity_flags is not None
+            else [],
+            status=_fact_status_str(f),
+        )
+        for f in facts
+    ]
+    link_rows = [
+        FactEvidenceRow(fact_id=f.id, evidence_id=eid)
+        for f in facts
+        for eid in f.evidence_ids
+    ]
+    session.add_all(fact_rows)
+    # Flush facts BEFORE link rows: the link rows reference FactRow only
+    # by raw foreign key (no ORM relationship), so a single flush may emit
+    # link INSERTs first, which PostgreSQL rejects. Two flushes keep the
+    # ordering explicit; the caller still commits.
+    session.flush()
+    session.add_all(link_rows)
+    session.flush()
+
+
+def list_facts_for_document(session: Session, document_id: UUID) -> list[Fact]:
+    """List facts for a document, ordered by fact id string for determinism.
+
+    Each fact's ``evidence_ids`` are rebuilt from the link table ordered by
+    evidence id string.
+    """
+    fact_rows = list(
+        session.scalars(
+            select(FactRow)
+            .where(FactRow.document_id == document_id)
+            .order_by(FactRow.id)
+        ).all()
+    )
+    # Ensure id-string ordering for determinism (UUID order matches
+    # lexicographic string order, but sort explicitly per the contract).
+    fact_rows.sort(key=lambda r: str(r.id))
+    if not fact_rows:
+        return []
+    fact_ids = [r.id for r in fact_rows]
+    link_rows = list(
+        session.scalars(
+            select(FactEvidenceRow)
+            .where(FactEvidenceRow.fact_id.in_(fact_ids))
+            .order_by(FactEvidenceRow.evidence_id)
+        ).all()
+    )
+    # Ensure evidence id-string ordering within each fact.
+    link_rows.sort(key=lambda r: (str(r.fact_id), str(r.evidence_id)))
+    by_fact: dict[UUID, list[UUID]] = {fid: [] for fid in fact_ids}
+    for link in link_rows:
+        by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
+    return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]
+
+
+def get_fact(session: Session, fact_id: UUID) -> Fact | None:
+    """Load a single fact by id, or ``None`` if missing.
+
+    ``evidence_ids`` are rebuilt from the link table ordered by evidence id
+    string.
+    """
+    row = session.get(FactRow, fact_id)
+    if row is None:
+        return None
+    link_rows = list(
+        session.scalars(
+            select(FactEvidenceRow)
+            .where(FactEvidenceRow.fact_id == fact_id)
+            .order_by(FactEvidenceRow.evidence_id)
+        ).all()
+    )
+    link_rows.sort(key=lambda r: str(r.evidence_id))
+    evidence_ids = [r.evidence_id for r in link_rows]
+    return _fact_from_row(row, evidence_ids)

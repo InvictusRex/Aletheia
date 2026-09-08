@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # Future LLM extension point. Safe placeholder only.
     llm_provider: str = Field(default="gemini")
     gemini_api_key: str = Field(default="")
+    gemini_model: str = Field(default="gemini-3.5-flash")
+
+    # Fact extraction bounds (evidence-scoped LLM calls only).
+    fact_chunk_max_chars: int = Field(default=6000)
+    fact_llm_timeout_s: int = Field(default=60)
+    fact_llm_max_retries: int = Field(default=2)
 
     # Local OCR fallback (PaddleOCR): no credentials, no cloud calls.
     # Enabled by default; the pipeline auto-disables OCR at runtime when

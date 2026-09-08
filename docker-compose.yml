@@ -19,6 +19,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-local}
       LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       OCR_ENABLED: ${OCR_ENABLED:-true}
       OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr}
       OCR_LANGUAGE: ${OCR_LANGUAGE:-en}

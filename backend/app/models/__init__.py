@@ -11,15 +11,33 @@ from app.models.evidence import (
     ExtractionMethod,
     make_evidence_id,
 )
+from app.models.fact import (
+    ChunkUnit,
+    EstimateStatus,
+    EvidenceChunk,
+    Fact,
+    FactDraft,
+    FactStatus,
+    TimeKind,
+    ValueKind,
+)
 from app.models.page import Page, QualityVerdict
 
 __all__ = [
+    "ChunkUnit",
     "Document",
+    "EstimateStatus",
+    "EvidenceChunk",
     "EvidenceType",
     "EvidenceUnit",
     "ExtractionMethod",
+    "Fact",
+    "FactDraft",
+    "FactStatus",
     "IngestionStatus",
     "Page",
     "QualityVerdict",
+    "TimeKind",
+    "ValueKind",
     "make_evidence_id",
 ]

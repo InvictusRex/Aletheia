@@ -115,6 +115,20 @@
       "rationale": "No cloud calls or credentials; provider abstraction keeps the engine replaceable; Docker pre-warms weights; hermetic auto-disable keeps tests deterministic.",
       "status": "accepted",
       "title": "Local PaddleOCR fallback instead of cloud OCR"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-013-fact-layer",
+      "rationale": "LLM proposes drafts, deterministic code disposes; evidence IDs enforced, numerics/dates parsed locally, no fabrication.",
+      "status": "accepted",
+      "title": "Evidence-scoped Gemini drafts with deterministic validation"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-014-fact-schema",
+      "rationale": "Nullable future columns avoid a second migration; link table gives relational provenance; entities stay embedded until reasoning.",
+      "status": "accepted",
+      "title": "facts + fact_evidence tables with reserved normalization columns"
     }
   ],
   "deviations_from_plan": [
@@ -126,14 +140,14 @@
     }
   ],
   "implementation_state": {
-    "phase": "ocr-fallback-complete",
-    "testing": "pytest 53 passed (health, extraction, pipeline, documents API, tables, OCR)",
+    "phase": "fact-extraction-complete",
+    "testing": "pytest 84 passed (health, extraction, pipeline, documents API, tables, OCR, facts)",
     "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
     "notes": [
-      "Live backend-to-DB path verified: /health reachable:true; starter PDF ingested and persisted (4889 TEXT + 309 TABLE + 1291 TABLE_CELL).",
-      "Real PaddleOCR smoke passed in-container: image-only page read exactly with bbox; native IMAGE marker preserved alongside OCR_TEXT.",
-      "oneDNN/MKLDNN disabled at PaddleOCR construction (verified kwarg plumbing); plain CPU kernels used.",
-      "Docker image rebuilt with paddleocr 3.7.0 + paddlepaddle 3.3.1 + libgl1/libgomp1/libglib2.0-0; models pre-warmed at build."
+      "Live migration to ae0679862c94 applied; starter excerpt ingested live and 27/27 fake-provider facts persisted with links.",
+      "save_facts uses two-phase flush: single-flush link INSERTs violate FK order on PostgreSQL (SQLite masked it).",
+      "Live POST /documents/{id}/facts without key returns 503 as designed.",
+      "Real Gemini calls remain manual-only (no key in any environment)."
     ]
   },
   "invariants": [
@@ -239,10 +253,40 @@
       "path": "backend/app/extraction/ocr_provider.py + paddle_ocr.py",
       "responsibility": "Local PaddleOCR fallback behind OcrProvider protocol; BAD pages only, native preserved, OCR_TEXT appended; oneDNN disabled (Paddle CPU PIR incompatibility).",
       "type": "component"
+    },
+    {
+      "id": "fact-models",
+      "path": "backend/app/models/fact.py",
+      "responsibility": "Canonical Fact/FactDraft/Chunk contracts: typed values, time/scope/context, evidence linkage, confidence.",
+      "type": "component"
+    },
+    {
+      "id": "llm-provider",
+      "path": "backend/app/llm/provider.py + gemini.py",
+      "responsibility": "Sync LLM transport abstraction; Gemini adapter on google-genai v2 with schema-constrained output, retries, lazy SDK.",
+      "type": "component"
+    },
+    {
+      "id": "fact-pipeline",
+      "path": "backend/app/facts/chunking.py + prompts.py + validator.py + service.py",
+      "responsibility": "Page-scoped chunking (atomic tables), generic prompting, deterministic draft validation, extraction orchestration.",
+      "type": "component"
+    },
+    {
+      "id": "facts-api",
+      "path": "backend/app/api/facts.py",
+      "responsibility": "Explicit POST extraction trigger + fact listing; 503 without key; upload path untouched.",
+      "type": "interface"
+    },
+    {
+      "id": "fact-persistence",
+      "path": "backend/app/db fact rows + fact_evidence link + alembic rev ae0679862c94",
+      "responsibility": "facts + fact_evidence tables; two-phase flush for FK ordering on PostgreSQL.",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "ocr-fallback",
+    "current": "fact-extraction",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -262,8 +306,8 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "fact-schema",
-      "gemini-extraction"
+      "normalization",
+      "matching-reasoning"
     ]
   },
   "relationships": [
@@ -390,6 +434,41 @@
     {
       "source": "extraction-tests",
       "target": "ocr-fallback",
+      "type": "covers"
+    },
+    {
+      "source": "fact-pipeline",
+      "target": "fact-models",
+      "type": "produces"
+    },
+    {
+      "source": "fact-pipeline",
+      "target": "llm-provider",
+      "type": "invokes"
+    },
+    {
+      "source": "fact-pipeline",
+      "target": "evidence-models",
+      "type": "reads"
+    },
+    {
+      "source": "facts-api",
+      "target": "fact-pipeline",
+      "type": "invokes"
+    },
+    {
+      "source": "facts-api",
+      "target": "fact-persistence",
+      "type": "persists-via"
+    },
+    {
+      "source": "fact-persistence",
+      "target": "postgres-pgvector",
+      "type": "stores"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "fact-pipeline",
       "type": "covers"
     }
   ],
