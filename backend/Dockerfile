@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM python:3.12-slim
 
 # System libraries required by PaddlePaddle/OpenCV at runtime.
@@ -8,12 +9,20 @@ RUN apt-get update \
 WORKDIR /code
 
 COPY backend/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# BuildKit cache mount persists pip's download cache across builds, so a
+# failed build does not force re-downloading large wheels. The cache lives
+# outside the image layer and is never baked into it.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --default-timeout=1800 --retries=10 -r requirements.txt
 
 # Pre-warm PaddleOCR model weights at build time so the running
 # container never downloads models (unit tests never initialize OCR).
 ENV PADDLEX_HOME=/root/.paddlex
 RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(lang='en')"
+
+# Pre-warm the sentence-transformer model for candidate discovery.
+ENV HF_HUB_CACHE=/root/.cache/huggingface
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 
 COPY backend/app ./app
 
