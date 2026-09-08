@@ -1,1 +1,341 @@
-{"constraints": [{"description": "Every fact must reference source evidence; unsupported LLM claims are rejected, never stored as truth.", "id": "constraint-evidence-first", "source": "docs/PLAN.md#42"}, {"description": "Never overwrite original source values with normalized values; retain both.", "id": "constraint-preserve-original", "source": "docs/PLAN.md#43"}, {"description": "Use deterministic code for arithmetic, unit conversion, and comparison; LLMs handle semantics only.", "id": "constraint-deterministic-first", "source": "docs/PLAN.md#11"}, {"description": "Embeddings are for candidate discovery, never final truth determination.", "id": "constraint-embeddings-discovery", "source": "docs/PLAN.md#15"}, {"description": "Starter datasets stay outside the repo at ../starter-datasets; no dataset-specific production logic.", "id": "constraint-no-hardcoded-datasets", "source": "docs/PLAN.md#36"}, {"description": "No Neo4j/Redis/Kafka/Celery/Kubernetes without a demonstrated need.", "id": "constraint-no-extra-infra", "source": "docs/PLAN.md#24"}], "decisions": [{"date": "2026-09-08", "id": "decision-001-pip", "rationale": "Simplest reviewer-friendly workflow for a take-home; chosen by maintainer over uv/Poetry.", "status": "accepted", "title": "Dependency management: pip + requirements.txt"}, {"date": "2026-09-08", "id": "decision-002-deferred-tables", "rationale": "Phase 0 is connectivity foundation only; domain schema arrives with Phase 1/Phase 4 when requirements are concrete.", "status": "accepted", "title": "Defer domain tables and migrations to Phase 1/4"}, {"date": "2026-09-08", "id": "decision-003-json-kg", "rationale": "Maintainer requested machine-readable JSON with stable node/relationship IDs at docs/PROJECT_KNOWLEDGE_GRAPH.json.", "status": "accepted", "title": "Knowledge graph representation: JSON"}, {"date": "2026-09-08", "id": "decision-004-sqlalchemy", "rationale": "Standard FastAPI/Postgres stack; pgvector integrates cleanly; avoids extra infrastructure.", "status": "accepted", "title": "ORM: SQLAlchemy 2.0 + psycopg"}, {"date": "2026-09-08", "id": "decision-005-health-shape", "rationale": "Readiness probes must distinguish a live app from a down dependency; never 500 on DB outage.", "status": "accepted", "title": "/health always 200 with nested database status"}], "deviations_from_plan": [{"id": "deviation-001-frontend-deferred", "plan_reference": "docs/PLAN.md#55 Phase 0 (frontend skeleton)", "reason": "Maintainer instruction: backend first, do not scaffold frontend yet.", "status": "accepted"}], "implementation_state": {"phase": "phase-0-complete-pending-validation", "testing": "pytest: app import/startup + /health shape", "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)"}, "invariants": ["No evidence means no fact.", "Original source values are preserved alongside normalized values.", "Context is checked before declaring contradiction.", "Missing information is never fabricated.", "Every relationship must be explainable and grounded in evidence."], "nodes": [{"id": "fastapi-app", "path": "backend/app/main.py", "responsibility": "Application factory (create_app) and router wiring. No business logic.", "type": "component"}, {"id": "health-api", "path": "backend/app/api/health.py", "responsibility": "GET /health. Returns app status plus nested database reachability.", "type": "interface"}, {"id": "settings", "path": "backend/app/core/config.py", "responsibility": "pydantic-settings environment config: database URL, LLM/AWS placeholders, dataset dir.", "type": "component"}, {"id": "db-session", "path": "backend/app/db/session.py", "responsibility": "SQLAlchemy 2.0 engine + SessionLocal + get_db + non-raising connectivity check.", "type": "component"}, {"id": "postgres-pgvector", "responsibility": "Relational + vector storage via pgvector/pgvector:pg16 service (db). Persistent volume pgdata.", "type": "infrastructure"}, {"id": "docker-compose", "path": "docker-compose.yml", "responsibility": "Reproducible local setup: db + backend services, env-based config.", "type": "infrastructure"}, {"id": "pytest-suite", "path": "backend/tests/test_health.py", "responsibility": "Behavior tests: import/startup, /health 200 + shape incl. database distinction.", "type": "testing"}], "phases": {"current": "phase-0", "phase_0_scope": ["Python 3.12", "FastAPI skeleton", "PostgreSQL + pgvector via Compose", ".env.example", "health endpoint", "testing foundation"], "phase_0_status": "implemented-pending-validation", "upcoming": ["phase-1-pdf-ingestion", "phase-2-tables", "phase-3-ocr", "phase-4-fact-schema"]}, "relationships": [{"source": "fastapi-app", "target": "health-api", "type": "exposes"}, {"source": "health-api", "target": "settings", "type": "reads"}, {"source": "health-api", "target": "db-session", "type": "invokes"}, {"source": "db-session", "target": "settings", "type": "reads"}, {"source": "db-session", "target": "postgres-pgvector", "type": "connects-to"}, {"source": "postgres-pgvector", "target": "db-session", "type": "stores (future: documents/evidence/facts/relationships/embeddings)"}, {"source": "docker-compose", "target": "fastapi-app", "type": "runs"}, {"source": "docker-compose", "target": "postgres-pgvector", "type": "runs"}, {"source": "pytest-suite", "target": "health-api", "type": "covers"}], "schema_version": "1.0"}
+{
+  "constraints": [
+    {
+      "description": "Every fact must reference source evidence; unsupported LLM claims are rejected, never stored as truth.",
+      "id": "constraint-evidence-first",
+      "source": "docs/PLAN.md#42"
+    },
+    {
+      "description": "Never overwrite original source values with normalized values; retain both.",
+      "id": "constraint-preserve-original",
+      "source": "docs/PLAN.md#43"
+    },
+    {
+      "description": "Use deterministic code for arithmetic, unit conversion, and comparison; LLMs handle semantics only.",
+      "id": "constraint-deterministic-first",
+      "source": "docs/PLAN.md#11"
+    },
+    {
+      "description": "Embeddings are for candidate discovery, never final truth determination.",
+      "id": "constraint-embeddings-discovery",
+      "source": "docs/PLAN.md#15"
+    },
+    {
+      "description": "Starter datasets stay outside the repo at ../starter-datasets; no dataset-specific production logic.",
+      "id": "constraint-no-hardcoded-datasets",
+      "source": "docs/PLAN.md#36"
+    },
+    {
+      "description": "No Neo4j/Redis/Kafka/Celery/Kubernetes without a demonstrated need.",
+      "id": "constraint-no-extra-infra",
+      "source": "docs/PLAN.md#24"
+    }
+  ],
+  "decisions": [
+    {
+      "date": "2026-09-08",
+      "id": "decision-001-pip",
+      "rationale": "Simplest reviewer-friendly workflow for a take-home; chosen by maintainer over uv/Poetry.",
+      "status": "accepted",
+      "title": "Dependency management: pip + requirements.txt"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-002-deferred-tables",
+      "rationale": "Phase 0 is connectivity foundation only; domain schema arrives with Phase 1/Phase 4 when requirements are concrete.",
+      "status": "accepted",
+      "title": "Defer domain tables and migrations to Phase 1/4"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-003-json-kg",
+      "rationale": "Maintainer requested machine-readable JSON with stable node/relationship IDs at docs/PROJECT_KNOWLEDGE_GRAPH.json.",
+      "status": "accepted",
+      "title": "Knowledge graph representation: JSON"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-004-sqlalchemy",
+      "rationale": "Standard FastAPI/Postgres stack; pgvector integrates cleanly; avoids extra infrastructure.",
+      "status": "accepted",
+      "title": "ORM: SQLAlchemy 2.0 + psycopg"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-005-health-shape",
+      "rationale": "Readiness probes must distinguish a live app from a down dependency; never 500 on DB outage.",
+      "status": "accepted",
+      "title": "/health always 200 with nested database status"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-006-alembic",
+      "rationale": "Proper revisions from the start; avoids create_all tech debt with 8 entity groups ahead.",
+      "status": "accepted",
+      "title": "Migrations: Alembic from day one"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-007-sync-ingest",
+      "rationale": "Prototype scale (<=100 pages); background worker only on demonstrated need per PLAN.",
+      "status": "accepted",
+      "title": "Synchronous POST /documents ingest"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-008-evidence-ids",
+      "rationale": "Re-ingest-stable IDs; uuid4 document scope keeps bundles isolated.",
+      "status": "accepted",
+      "title": "Deterministic uuid5 evidence IDs"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-009-page-labels",
+      "rationale": "Never synthesize source numbers; starter PDFs carry no /PageLabels so None is correct.",
+      "status": "accepted",
+      "title": "source_page_number best-effort via PDF page labels, else None"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-010-test-pdfs",
+      "rationale": "No binaries in git; starter PDFs manual-validation only via DATASET_DIR.",
+      "status": "accepted",
+      "title": "Test PDFs generated in-test via PyMuPDF"
+    }
+  ],
+  "deviations_from_plan": [
+    {
+      "id": "deviation-001-frontend-deferred",
+      "plan_reference": "docs/PLAN.md#55 Phase 0 (frontend skeleton)",
+      "reason": "Maintainer instruction: backend first, do not scaffold frontend yet.",
+      "status": "accepted"
+    }
+  ],
+  "implementation_state": {
+    "phase": "phase-1-complete",
+    "testing": "pytest 27 passed (health, extraction, pipeline, documents API)",
+    "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
+    "notes": [
+      "Live backend-to-DB path still unverified: Docker daemon was down, so reachable:true and container build are untested.",
+      "Starter PDFs define no /PageLabels, so source_page_number is None on real data (best-effort per plan).",
+      "Earnings-deck BAD pages are sparse/image slides flagged NEEDS_OCR for Phase 3 routing."
+    ]
+  },
+  "invariants": [
+    "No evidence means no fact.",
+    "Original source values are preserved alongside normalized values.",
+    "Context is checked before declaring contradiction.",
+    "Missing information is never fabricated.",
+    "Every relationship must be explainable and grounded in evidence.",
+    "Extraction failures are explicit (FAILED/PARTIAL with preserved evidence), never silent."
+  ],
+  "nodes": [
+    {
+      "id": "fastapi-app",
+      "path": "backend/app/main.py",
+      "responsibility": "Application factory (create_app) and router wiring. No business logic.",
+      "type": "component"
+    },
+    {
+      "id": "health-api",
+      "path": "backend/app/api/health.py",
+      "responsibility": "GET /health. Returns app status plus nested database reachability.",
+      "type": "interface"
+    },
+    {
+      "id": "settings",
+      "path": "backend/app/core/config.py",
+      "responsibility": "pydantic-settings environment config: database URL, LLM/AWS placeholders, dataset dir.",
+      "type": "component"
+    },
+    {
+      "id": "db-session",
+      "path": "backend/app/db/session.py",
+      "responsibility": "SQLAlchemy 2.0 engine + SessionLocal + get_db + non-raising connectivity check.",
+      "type": "component"
+    },
+    {
+      "id": "postgres-pgvector",
+      "responsibility": "Relational + vector storage via pgvector/pgvector:pg16 service (db). Persistent volume pgdata.",
+      "type": "infrastructure"
+    },
+    {
+      "id": "docker-compose",
+      "path": "docker-compose.yml",
+      "responsibility": "Reproducible local setup: db + backend services, env-based config.",
+      "type": "infrastructure"
+    },
+    {
+      "id": "pytest-suite",
+      "path": "backend/tests/test_health.py",
+      "responsibility": "Behavior tests: import/startup, /health 200 + shape incl. database distinction.",
+      "type": "testing"
+    },
+    {
+      "id": "evidence-models",
+      "path": "backend/app/models/",
+      "responsibility": "Canonical Pydantic contracts: Document, Page, EvidenceUnit, enums, deterministic evidence IDs.",
+      "type": "component"
+    },
+    {
+      "id": "pymupdf-extractor",
+      "path": "backend/app/extraction/pymupdf.py",
+      "responsibility": "Native PDF backbone: text blocks + bboxes, metadata, image signals, best-effort page labels.",
+      "type": "component"
+    },
+    {
+      "id": "quality-assessor",
+      "path": "backend/app/extraction/quality.py",
+      "responsibility": "Deterministic GOOD/BAD scoring; BAD flags NEEDS_OCR for Phase 3.",
+      "type": "component"
+    },
+    {
+      "id": "ingestion-pipeline",
+      "path": "backend/app/extraction/pipeline.py",
+      "responsibility": "Pure bytes-to-bundle orchestration with explicit FAILED/PARTIAL handling.",
+      "type": "component"
+    },
+    {
+      "id": "documents-api",
+      "path": "backend/app/api/documents.py",
+      "responsibility": "POST /documents (sync ingest) + GET /documents/{id}.",
+      "type": "interface"
+    },
+    {
+      "id": "persistence",
+      "path": "backend/app/db/models.py + repositories.py + backend/alembic/",
+      "responsibility": "documents/pages/evidence_units tables, Alembic migrations, save/load bundle.",
+      "type": "component"
+    },
+    {
+      "id": "extraction-tests",
+      "path": "backend/tests/",
+      "responsibility": "Unit + API integration tests with in-test generated PDFs (no fixtures).",
+      "type": "testing"
+    }
+  ],
+  "phases": {
+    "current": "phase-1",
+    "phase_0_scope": [
+      "Python 3.12",
+      "FastAPI skeleton",
+      "PostgreSQL + pgvector via Compose",
+      ".env.example",
+      "health endpoint",
+      "testing foundation"
+    ],
+    "phase_0_status": "complete",
+    "phase_1_scope": [
+      "Evidence/domain models",
+      "PyMuPDF native extraction",
+      "Extraction quality assessment",
+      "Alembic persistence (documents/pages/evidence_units)",
+      "Document ingest API",
+      "Unit + integration tests"
+    ],
+    "phase_1_status": "complete",
+    "upcoming": [
+      "phase-2-tables",
+      "phase-3-ocr",
+      "phase-4-fact-schema"
+    ]
+  },
+  "relationships": [
+    {
+      "source": "fastapi-app",
+      "target": "health-api",
+      "type": "exposes"
+    },
+    {
+      "source": "health-api",
+      "target": "settings",
+      "type": "reads"
+    },
+    {
+      "source": "health-api",
+      "target": "db-session",
+      "type": "invokes"
+    },
+    {
+      "source": "db-session",
+      "target": "settings",
+      "type": "reads"
+    },
+    {
+      "source": "db-session",
+      "target": "postgres-pgvector",
+      "type": "connects-to"
+    },
+    {
+      "source": "postgres-pgvector",
+      "target": "db-session",
+      "type": "stores (future: documents/evidence/facts/relationships/embeddings)"
+    },
+    {
+      "source": "docker-compose",
+      "target": "fastapi-app",
+      "type": "runs"
+    },
+    {
+      "source": "docker-compose",
+      "target": "postgres-pgvector",
+      "type": "runs"
+    },
+    {
+      "source": "pytest-suite",
+      "target": "health-api",
+      "type": "covers"
+    },
+    {
+      "source": "fastapi-app",
+      "target": "documents-api",
+      "type": "exposes"
+    },
+    {
+      "source": "documents-api",
+      "target": "ingestion-pipeline",
+      "type": "invokes"
+    },
+    {
+      "source": "documents-api",
+      "target": "persistence",
+      "type": "persists-via"
+    },
+    {
+      "source": "ingestion-pipeline",
+      "target": "pymupdf-extractor",
+      "type": "invokes"
+    },
+    {
+      "source": "ingestion-pipeline",
+      "target": "quality-assessor",
+      "type": "invokes"
+    },
+    {
+      "source": "ingestion-pipeline",
+      "target": "evidence-models",
+      "type": "produces"
+    },
+    {
+      "source": "persistence",
+      "target": "postgres-pgvector",
+      "type": "stores"
+    },
+    {
+      "source": "persistence",
+      "target": "evidence-models",
+      "type": "maps"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "ingestion-pipeline",
+      "type": "covers"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "documents-api",
+      "type": "covers"
+    }
+  ],
+  "schema_version": "1.0"
+}
