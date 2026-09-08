@@ -53,4 +53,6 @@ OCR fallback: pages whose native extraction quality verdict is `BAD` are additio
 
 Fact extraction: `POST /documents/{id}/facts` runs evidence-scoped Gemini extraction over one page-chunk at a time (never whole documents, never at upload time) and persists validated facts with evidence links; returns per-chunk counts plus rejection/error details, or 503 when no API key is configured. `GET /documents/{id}/facts` lists persisted facts. Every fact carries subject/predicate/value/unit/time/scope/context, deterministic numeric/date parsing where unambiguous, extraction confidence with ambiguity flags, and at least one evidence ID — unsupported content is rejected, never stored. Configure with `GEMINI_API_KEY` and `GEMINI_MODEL` (default `gemini-3.5-flash`).
 
+Fact normalization: `POST /documents/{id}/normalize` deterministically converts persisted facts into canonical comparison form without touching raw fields, evidence links, confidence, or status — e.g. `₹81,415 Mn` → `8141.5 INR crore`, `1,429K tonnes` → `1.429 million tonnes`, `6.5%` → `0.065 fraction`. No LLM is involved; unknown or ambiguous units yield explicit `norm:` flags instead of invented values, and fiscal periods stay dateless.
+
 Full setup/architecture documentation lands in Phase 13 per `docs/PLAN.md`.

@@ -331,3 +331,22 @@ def get_fact(session: Session, fact_id: UUID) -> Fact | None:
     link_rows.sort(key=lambda r: str(r.evidence_id))
     evidence_ids = [r.evidence_id for r in link_rows]
     return _fact_from_row(row, evidence_ids)
+
+
+def update_fact_normalization(session: Session, fact: Fact) -> bool:
+    """Persist a normalized fact's reserved columns by id.
+
+    Updates ONLY normalized_number, normalized_unit, canonical_subject,
+    canonical_predicate, and ambiguity_flags. Returns False when the
+    fact row does not exist; the caller commits.
+    """
+    row = session.get(FactRow, fact.id)
+    if row is None:
+        return False
+    row.normalized_number = fact.normalized_number
+    row.normalized_unit = fact.normalized_unit
+    row.canonical_subject = fact.canonical_subject
+    row.canonical_predicate = fact.canonical_predicate
+    row.ambiguity_flags = list(fact.ambiguity_flags)
+    session.flush()
+    return True

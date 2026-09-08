@@ -129,6 +129,13 @@
       "rationale": "Nullable future columns avoid a second migration; link table gives relational provenance; entities stay embedded until reasoning.",
       "status": "accepted",
       "title": "facts + fact_evidence tables with reserved normalization columns"
+    },
+    {
+      "date": "2026-09-08",
+      "id": "decision-015-normalization",
+      "rationale": "Comparison layer must receive ready-canonical values; canonical scales fixed per currency/family in code tables; FY stays dateless; uncertainty via flags with no schema change.",
+      "status": "accepted",
+      "title": "Deterministic canonical conversion without LLM or migration"
     }
   ],
   "deviations_from_plan": [
@@ -140,14 +147,13 @@
     }
   ],
   "implementation_state": {
-    "phase": "fact-extraction-complete",
-    "testing": "pytest 84 passed (health, extraction, pipeline, documents API, tables, OCR, facts)",
+    "phase": "normalization-complete",
+    "testing": "pytest 123 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization)",
     "vector_extension": "pgvector image in Compose; extension not yet enabled (no schema)",
     "notes": [
-      "Live migration to ae0679862c94 applied; starter excerpt ingested live and 27/27 fake-provider facts persisted with links.",
-      "save_facts uses two-phase flush: single-flush link INSERTs violate FK order on PostgreSQL (SQLite masked it).",
-      "Live POST /documents/{id}/facts without key returns 503 as designed.",
-      "Real Gemini calls remain manual-only (no key in any environment)."
+      "Canonical units: INR crore / USD,EUR,GBP million / million tonnes / fraction / percentage_point / cleaned counts.",
+      "Live POST normalize over validation doc: 27/27 normalized, reserved columns verified in PostgreSQL.",
+      "No migration: ae0679862c94 remains single head."
     ]
   },
   "invariants": [
@@ -283,10 +289,16 @@
       "path": "backend/app/db fact rows + fact_evidence link + alembic rev ae0679862c94",
       "responsibility": "facts + fact_evidence tables; two-phase flush for FK ordering on PostgreSQL.",
       "type": "component"
+    },
+    {
+      "id": "fact-normalization",
+      "path": "backend/app/facts/normalization.py",
+      "responsibility": "Deterministic value/unit/time/name canonicalization into reserved columns; flags-only uncertainty, no migration.",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "fact-extraction",
+    "current": "normalization",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -306,7 +318,6 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "normalization",
       "matching-reasoning"
     ]
   },
@@ -469,6 +480,21 @@
     {
       "source": "extraction-tests",
       "target": "fact-pipeline",
+      "type": "covers"
+    },
+    {
+      "source": "fact-pipeline",
+      "target": "fact-normalization",
+      "type": "invokes"
+    },
+    {
+      "source": "fact-normalization",
+      "target": "fact-models",
+      "type": "reads"
+    },
+    {
+      "source": "extraction-tests",
+      "target": "fact-normalization",
       "type": "covers"
     }
   ],
