@@ -19,6 +19,7 @@ import api as api_client
 
 ACCENT = "#D0D500"
 ERROR = "#FF4B3F"
+GREEN = "#6FCF97"
 
 REL_TYPES = ["CORROBORATES", "CONTRADICTS", "CONTEXTUAL_DIFFERENCE", "RELATED"]
 
@@ -46,7 +47,7 @@ CSS = """
   vertical-align: top; }
 .tbl tr:last-child td { border-bottom: none; }
 .doc-name { font-size: 14.5px; font-weight: 600; }
-.st-ok { color: #9AA29A; } .st-warn { color: #D0D500; } .st-err { color: #FF4B3F; }
+.st-ok { color: #6FCF97; } .st-warn { color: #D0D500; } .st-err { color: #FF4B3F; } .st-mut { color: #5F5F5F; }
 .fact { background: #111111; border: 1px solid #202020; border-left: 2px solid #3A3A3A;
   border-radius: 3px; padding: 12px 16px; margin-bottom: 10px; }
 .fact-subj { font-size: 12.5px; font-weight: 600; letter-spacing: 0.12em;
@@ -62,13 +63,14 @@ CSS = """
 .rel { background: #111111; border: 1px solid #202020; border-radius: 3px;
   padding: 12px 16px; margin-bottom: 10px; }
 .rel-contra { border-left: 2px solid #FF4B3F; }
-.rel-corrob { border-left: 2px solid #3A3A3A; }
+.rel-corrob { border-left: 2px solid #2E5C43; }
 .rel-ctx { border-left: 2px dashed #8A8A8A; }
 .badge { display: inline-block; font-size: 11px; font-weight: 700;
   letter-spacing: 0.12em; padding: 2px 8px; border: 1px solid #2A2A2A;
   border-radius: 2px; }
 .badge-contra { color: #FF4B3F; border-color: #FF4B3F; }
 .badge-review { color: #D0D500; border-color: #D0D500; }
+.badge-grn { color: #6FCF97; border-color: #6FCF97; }
 .badge-dim { color: #8A8A8A; }
 .conf { font-size: 12.5px; color: #8A8A8A; }
 .expl { font-size: 13.5px; color: #B5B5B5; line-height: 1.55; margin-top: 8px; }
@@ -114,6 +116,7 @@ def _init_state() -> None:
         "doc_sizes": {},
         "show_uploader": False,
         "uploader_nonce": 0,
+        "entered": True,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -232,6 +235,7 @@ def _handle_uploads(files) -> None:
                    f"{(result or {}).get('evidence_count', '?')} evidence units)")
     st.session_state.uploader_nonce += 1
     st.session_state.show_uploader = False
+    st.session_state.entered = True
     st.rerun()
 
 
@@ -262,6 +266,8 @@ def _render_navbar() -> None:
             st.rerun()
     with ref_col:
         if st.button("Refresh", use_container_width=True):
+            # UI reset only: clears the page back to the upload screen.
+            # Backend documents are never touched.
             st.session_state.selected_doc_id = None
             st.session_state.selected_fact_id = None
             st.session_state.selected_rel_id = None
@@ -269,14 +275,14 @@ def _render_navbar() -> None:
             st.session_state.rel_type_filter = "All"
             st.session_state.rel_min_conf = 0.0
             st.session_state.show_uploader = False
-            st.cache_data.clear()
+            st.session_state.entered = False
             st.rerun()
     if st.session_state.show_uploader:
         with st.expander("Upload PDFs", expanded=True):
             _render_uploader(f"uploader_{st.session_state.uploader_nonce}")
 
 
-def _render_empty_state() -> None:
+def _render_empty_state(doc_count: int = 0) -> None:
     st.markdown(
         '<div class="hero"><div class="hero-title">ALETHEIA</div>'
         '<div class="hero-sub">FACT KNOWLEDGE LAYER</div></div>',
@@ -289,6 +295,15 @@ def _render_empty_state() -> None:
         unsafe_allow_html=True,
     )
     _render_uploader(f"hero_uploader_{st.session_state.uploader_nonce}")
+    if doc_count > 0 and not st.session_state.entered:
+        st.markdown(
+            f"<div class='fact-meta' style='text-align:center'>"
+            f"{doc_count} document(s) already in the backend.</div>",
+            unsafe_allow_html=True,
+        )
+        if st.button("LOAD WORKSPACE", type="primary"):
+            st.session_state.entered = True
+            st.rerun()
     health, err = api_client.health()
     if err is not None:
         st.error(err)
@@ -297,12 +312,38 @@ def _render_empty_state() -> None:
         st.warning(f"Backend is up but the database is unreachable: {detail}")
 
 
-def _render_documents_section(documents: list[dict]) -> list[dict]:
-    st.markdown('<div class="section">DOCUMENTS</div>', unsafe_allow_html=True)
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    if not documents:
-        st.info("No documents ingested yet.")
+def _render_doc_filter(documents: list[dict]) -> list[dict]:
+    """Document scope picker. Always rendered at the top of tab content so
+    the dropdown menu opens downward into free space."""
+    names = [str(d.get("filename", "—")) for d in documents]
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    seen: dict[str, int] = {}
+    options = ["All documents"]
+    opt_ids: list[str | None] = [None]
+    for doc, name in zip(documents, names):
+        if counts[name] > 1:
+            seen[name] = seen.get(name, 0) + 1
+            options.append(f"{name} · {str(doc.get('id'))[:8]}")
+        else:
+            options.append(name)
+        opt_ids.append(str(doc.get("id")))
+    current = st.session_state.selected_doc_id
+    try:
+        default_idx = 0 if current is None else opt_ids.index(current)
+    except ValueError:
+        default_idx = 0
+    choice = st.selectbox("Document", options, index=default_idx, key="doc_filter")
+    picked_id = opt_ids[options.index(choice)]
+    if picked_id is None:
+        st.session_state.selected_doc_id = None
         return documents
+    st.session_state.selected_doc_id = picked_id
+    return [d for d in documents if str(d.get("id")) == picked_id]
+
+
+def _render_documents_table(documents: list[dict]) -> None:
     cells = []
     for doc in documents:
         doc_id = str(doc.get("id"))
@@ -319,20 +360,6 @@ def _render_documents_section(documents: list[dict]) -> list[dict]:
         + "".join(cells) + "</tbody></table>",
         unsafe_allow_html=True,
     )
-    options = ["All documents"] + [str(d.get("filename", "—")) for d in documents]
-    current = st.session_state.selected_doc_id
-    ids = [str(d.get("id")) for d in documents]
-    try:
-        default_idx = 0 if current is None else ids.index(current) + 1
-    except ValueError:
-        default_idx = 0
-    choice = st.selectbox("Filter to document", options, index=default_idx)
-    if choice == "All documents":
-        st.session_state.selected_doc_id = None
-        return documents
-    picked = next(d for d in documents if str(d.get("filename", "—")) == choice)
-    st.session_state.selected_doc_id = str(picked.get("id"))
-    return [picked]
 
 
 def _render_tabs() -> None:
@@ -431,6 +458,7 @@ def _render_fact_evidence(fact: dict, doc_name: str, evidence_by_id: dict) -> No
 
 
 def _render_knowledge(documents: list[dict]) -> None:
+    documents = _render_doc_filter(documents)
     query = st.text_input(
         "Search facts, entities, metrics",
         value=st.session_state.query,
@@ -504,7 +532,12 @@ def _render_knowledge(documents: list[dict]) -> None:
 
 def _rel_badge(rel: dict) -> str:
     rtype = str(rel.get("relationship_type", "?"))
-    cls = "badge-contra" if rtype == "CONTRADICTS" else "badge-dim"
+    if rtype == "CONTRADICTS":
+        cls = "badge-contra"
+    elif rtype == "CORROBORATES":
+        cls = "badge-grn"
+    else:
+        cls = "badge-dim"
     review = ""
     if rel.get("status") == "NEEDS_REVIEW":
         review = ' <span class="badge badge-review">NEEDS REVIEW</span>'
@@ -520,24 +553,23 @@ def _fact_summary(fact: dict, doc_names: dict) -> str:
 
 
 def _render_relationships(documents: list[dict]) -> None:
-    cols = st.columns([2, 1])
-    with cols[0]:
-        options = ["All"] + REL_TYPES
-        current = st.session_state.rel_type_filter
-        sel = st.selectbox("Relationship type", options,
-                           index=options.index(current) if current in options else 0)
-        st.session_state.rel_type_filter = sel
-    with cols[1]:
-        min_conf = st.slider("Min confidence", 0.0, 1.0,
-                             float(st.session_state.rel_min_conf), 0.05)
-        st.session_state.rel_min_conf = min_conf
+    all_names = {str(d.get("id")): str(d.get("filename", "—")) for d in documents}
+    documents = _render_doc_filter(documents)
+    type_cols = st.columns(5)
+    for col, opt in zip(type_cols, ["All"] + REL_TYPES):
+        btn_type = "primary" if st.session_state.rel_type_filter == opt else "secondary"
+        if col.button(opt, key=f"reltype_{opt}", type=btn_type, use_container_width=True):
+            st.session_state.rel_type_filter = opt
+            st.rerun()
+    min_conf = st.slider("Min confidence", 0.0, 1.0,
+                         float(st.session_state.rel_min_conf), 0.05)
+    st.session_state.rel_min_conf = min_conf
+    sel = st.session_state.rel_type_filter
     rel_type = None if sel == "All" else sel
-    doc_filter = st.session_state.selected_doc_id
-    visible = [d for d in documents
-               if doc_filter is None or str(d.get("id")) == doc_filter]
+    visible = documents
     with st.spinner("Loading relationships ..."):
         rels: dict[str, dict] = {}
-        doc_names = {str(d.get("id")): str(d.get("filename", "—")) for d in documents}
+        doc_names = dict(all_names)
         first_err = None
         for doc in visible:
             items, err = api_client.list_relationships(
@@ -614,6 +646,16 @@ def _render_relationships(documents: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------- documents tab
+
+
+def _render_documents_tab(documents: list[dict]) -> None:
+    st.markdown('<div class="section">DOCUMENTS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    _render_documents_table(documents)
+    st.markdown('<div class="section">INSPECT</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    _render_doc_filter(documents)
+    _render_document_detail(documents)
 
 
 def _render_document_detail(documents: list[dict]) -> None:
@@ -715,19 +757,18 @@ def main() -> None:
             st.rerun()
         return
 
-    if not documents:
-        _render_empty_state()
+    if not st.session_state.entered or not documents:
+        _render_empty_state(len(documents))
         return
 
     _render_navbar()
-    visible_docs = _render_documents_section(documents)
     _render_tabs()
     if st.session_state.active_tab == "KNOWLEDGE":
-        _render_knowledge(visible_docs if st.session_state.selected_doc_id else documents)
+        _render_knowledge(documents)
     elif st.session_state.active_tab == "RELATIONSHIPS":
         _render_relationships(documents)
     else:
-        _render_document_detail(visible_docs)
+        _render_documents_tab(documents)
 
 
 if __name__ == "__main__":
