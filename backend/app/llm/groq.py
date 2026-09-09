@@ -34,8 +34,9 @@ Retry policy: up to ``max_retries`` retries (total attempts = 1 +
 ``max_retries``) on transient failures ONLY (rate limits / HTTP 429,
 timeouts, connection errors, server errors, parse failures) with
 bounded exponential backoff plus jitter — honoring provider
-``Retry-After`` subject to ``backoff_max_s``. Deterministic 4xx
-failures (authentication, bad request, permission, not-found) are
+``Retry-After`` subject to ``backoff_max_s``. Daily-quota (TPD)
+exhaustion is NOT transient and fails immediately without retry.
+Deterministic 4xx failures (authentication, bad request, permission, not-found) are
 raised immediately without retry. Pacing of request starts goes through
 the shared :class:`RateLimiter`.
 """
@@ -91,8 +92,51 @@ __all__ = [
     "EXTRACTION_TEMPERATURE",
     "GroqFactsProvider",
     "clean_json_text",
+    "is_tpd_exhaustion",
     "repair_truncated_json",
 ]
+
+
+def is_tpd_exhaustion(exc: BaseException) -> bool:
+    """True when a provider error explicitly signals DAILY token exhaustion.
+
+    Pure function over the exception text: matches Groq's
+    ``tokens per day (TPD)`` quota message. Transient per-minute/per-request
+    429s do NOT match and keep the normal retry/backoff path.
+    """
+    try:
+        text = str(exc).lower()
+    except Exception:
+        return False
+    return "tokens per day" in text or "(tpd)" in text
+
+
+_TPD_NUMBERS_RE = re.compile(
+    r"limit\s+(\d+)\s*,\s*used\s+(\d+)\s*,\s*requested\s+(\d+)",
+    re.IGNORECASE,
+)
+_TPD_RETRY_RE = re.compile(r"try again in\s+([^\s.]+(?:\s+[^\s.]+)?)", re.IGNORECASE)
+
+
+def _tpd_detail(exc: BaseException) -> str:
+    """Extract limit/used/requested/retry hints from a TPD error (best-effort)."""
+    try:
+        text = str(exc)
+    except Exception:
+        return "unparseable provider error"
+    numbers = _TPD_NUMBERS_RE.search(text)
+    retry = _TPD_RETRY_RE.search(text)
+    parts = []
+    if numbers:
+        parts.append(
+            f"TPD limit={numbers.group(1)} used={numbers.group(2)} "
+            f"requested={numbers.group(3)}"
+        )
+    else:
+        parts.append("TPD limit unknown")
+    if retry:
+        parts.append(f"provider says try again in {retry.group(1).strip()}")
+    return "; ".join(parts)
 
 
 def clean_json_text(content: str) -> str:
@@ -300,7 +344,7 @@ class GroqFactsProvider:
         except ImportError as exc:
             raise LLMUnavailableError(_SDK_INSTALL_GUIDANCE) from exc
 
-        client = Groq(api_key=self._api_key)
+        client = Groq(api_key=self._api_key, max_retries=0)
 
         def _pace_and_maybe_wait() -> None:
             if self._limiter is None:
@@ -361,6 +405,17 @@ class GroqFactsProvider:
                     f"(model={self._model}): {exc}"
                 ) from exc
             except Exception as exc:
+                if is_tpd_exhaustion(exc):
+                    # Daily quota exhaustion is NOT transient: retrying
+                    # cannot help until the provider window resets, so
+                    # fail this chunk immediately instead of burning the
+                    # 5-attempt backoff loop. The service records the
+                    # chunk as failed; completed chunks stay persisted.
+                    raise LLMTransportError(
+                        f"Groq daily token quota exhausted (TPD), not "
+                        f"retried (model={self._model}): "
+                        f"{_tpd_detail(exc)}"
+                    ) from exc
                 if last:
                     raise LLMTransportError(
                         f"Groq transport/API error after {attempts} "

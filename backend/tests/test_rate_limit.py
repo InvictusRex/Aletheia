@@ -218,10 +218,19 @@ def _install_fake_groq(monkeypatch, behavior):
         "boom": _Err,
     }
 
+    _TPD_MESSAGE = (
+        "Error code: 429 - {'error': {'message': 'Rate limit reached "
+        "for model `openai/gpt-oss-120b` in organization `org_test` "
+        "service tier `on_demand` on tokens per day (TPD): Limit 200000, "
+        "Used 197396, Requested 3709. Please try again in 7m57s.'}}"
+    )
+
     def _raise(kind, **kwargs):
-        cls = errors[kind]
+        cls = errors[kind] if kind in errors else _RateLimitErr
         if kind == "rate_limit":
             raise cls("429 RESOURCE_EXHAUSTED", headers=kwargs.get("headers"))
+        if kind == "tpd":
+            raise cls(_TPD_MESSAGE, headers=kwargs.get("headers"))
         raise cls("synthetic failure")
 
     class FakeMessage:
@@ -391,3 +400,60 @@ def test_malformed_output_surfaces_without_fabrication(monkeypatch):
     with pytest.raises(LLMMalformedError):
         provider.extract_facts("extract facts about X")
     assert state["calls"] == 2  # retried once, then surfaced — never guessed
+
+
+# ---------------------------------------------------------------------------
+# G. TPD exhaustion fails fast; transient 429s still retry (no network)
+# ---------------------------------------------------------------------------
+
+
+def test_is_tpd_exhaustion_matches_daily_quota_only():
+    from app.llm.groq import is_tpd_exhaustion
+
+    tpd = (
+        "Error code: 429 - {'error': {'message': 'Rate limit reached "
+        "for model `openai/gpt-oss-120b` on tokens per day (TPD): "
+        "Limit 200000, Used 197396, Requested 3709.'}}"
+    )
+    assert is_tpd_exhaustion(Exception(tpd)) is True
+    assert is_tpd_exhaustion(Exception("TOKENS PER DAY (tpd): Limit 1")) is True
+    # Transient failures must NOT match: they keep the retry path.
+    assert is_tpd_exhaustion(Exception("429 RESOURCE_EXHAUSTED")) is False
+    assert is_tpd_exhaustion(Exception("Rate limit reached, retry")) is False
+    assert is_tpd_exhaustion(Exception("timeout")) is False
+    assert is_tpd_exhaustion(Exception("")) is False
+
+
+def test_tpd_exhaustion_fails_fast_without_retry(monkeypatch):
+    import time as _time
+    from app.llm.groq import GroqFactsProvider
+    from app.llm.provider import LLMTransportError
+
+    state = _install_fake_groq(monkeypatch, {"calls": {1: "tpd"}})
+    monkeypatch.setattr(_time, "sleep", lambda s: state["sleeps"].append(s))
+    provider = GroqFactsProvider(
+        api_key="k", max_retries=5, backoff_base_s=0.0, backoff_max_s=0.0)
+    with pytest.raises(LLMTransportError) as excinfo:
+        provider.extract_facts("extract facts about X")
+    assert state["calls"] == 1  # no retries on daily-quota exhaustion
+    assert state["sleeps"] == []
+    message = str(excinfo.value)
+    assert "TPD" in message
+    assert "not retried" in message
+    assert "openai/gpt-oss-120b" in message
+    assert "200000" in message and "197396" in message
+
+
+def test_transient_429_still_retries_after_tpd_guard(monkeypatch):
+    import time as _time
+    from app.llm.groq import GroqFactsProvider
+
+    # Plain 429 (no TPD text) keeps the existing retry/backoff behavior.
+    state = _install_fake_groq(
+        monkeypatch, {"calls": {1: "rate_limit", 2: "rate_limit"}})
+    monkeypatch.setattr(_time, "sleep", lambda s: state["sleeps"].append(s))
+    provider = GroqFactsProvider(
+        api_key="k", max_retries=5, backoff_base_s=0.0, backoff_max_s=0.0)
+    batch = provider.extract_facts("extract facts about X")
+    assert batch.model == provider.model_name
+    assert state["calls"] == 3
