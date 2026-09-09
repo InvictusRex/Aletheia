@@ -117,6 +117,7 @@ def _init_state() -> None:
         "show_uploader": False,
         "uploader_nonce": 0,
         "entered": True,
+        "pipeline_reports": {},
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -648,6 +649,152 @@ def _render_relationships(documents: list[dict]) -> None:
 # ---------------------------------------------------------------- documents tab
 
 
+def _pipeline_reports(doc_id: str) -> dict:
+    store = st.session_state.pipeline_reports
+    report = store.get(doc_id)
+    if not isinstance(report, dict):
+        report = {}
+        store[doc_id] = report
+    return report
+
+
+def _render_report_errors(errors) -> None:
+    for err in (errors or [])[:5]:
+        st.error(str(err))
+    if errors and len(errors) > 5:
+        st.markdown(f"<div class='fact-meta'>… and {len(errors) - 5} more</div>",
+                    unsafe_allow_html=True)
+
+
+def _stage_state(entry: dict) -> tuple[str, str]:
+    """Map a stored pipeline report to a (label, css-class) stage state."""
+    if not entry:
+        return "PENDING", "st-mut"
+    if entry.get("error") is not None:
+        return "FAILED", "st-err"
+    if isinstance(entry.get("report"), dict):
+        return "DONE", "st-ok"
+    return "PENDING", "st-mut"
+
+
+def _render_pipeline_status(stored: dict) -> None:
+    """Compact stage strip. A stage is DONE only when its real backend
+    call succeeded; transport/report failures show FAILED explicitly."""
+    stages = [
+        ("EXTRACT", _stage_state(stored.get("facts") or {})),
+        ("NORMALIZE", _stage_state(stored.get("normalize") or {})),
+        ("RELATE", _stage_state(stored.get("relationships") or {})),
+    ]
+    cells = " · ".join(
+        f"{name} <span class='{cls}'>{state}</span>"
+        for name, (state, cls) in stages
+    )
+    complete = all(state == "DONE" for _, (state, _) in stages)
+    tail = (" · <span class='st-ok'>COMPLETE</span>" if complete else "")
+    st.markdown(f"<div class='fact-meta'>pipeline — {cells}{tail}</div>",
+                unsafe_allow_html=True)
+
+
+def _render_pipeline(doc_id: str) -> None:
+    """Per-document pipeline actions driving the real backend pipeline.
+
+    Upload → EXTRACT FACTS → NORMALIZE → FIND RELATIONSHIPS, with the
+    backend's verbatim reports rendered below. Failures surface as
+    errors; already-persisted results are never overwritten in the UI,
+    and reruns resume completed chunks server-side.
+    """
+    st.markdown('<div class="section">PROCESSING PIPELINE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    st.markdown("<div class='fact-meta'>Extraction is bounded to representative "
+                "chunks per run; reruns resume completed chunks without duplicating "
+                "facts. Each action below calls the backend and reports its outcome."
+                "</div>", unsafe_allow_html=True)
+    if st.button("RUN FULL PIPELINE", key=f"pipe_all_{doc_id}", type="primary",
+                 use_container_width=True):
+        # Sequential stages sharing one status line. A transport-level
+        # failure stops the chain; per-chunk errors inside a 200 report
+        # do not (partial results stay preserved and visible).
+        with st.spinner("Extracting facts (real Groq calls) ..."):
+            report, err = api_client.trigger_facts(doc_id)
+        _pipeline_reports(doc_id)["facts"] = {"report": report, "error": err}
+        if err is None:
+            with st.spinner("Normalizing ..."):
+                report, err = api_client.trigger_normalize(doc_id)
+            _pipeline_reports(doc_id)["normalize"] = {"report": report, "error": err}
+        if err is None:
+            with st.spinner("Finding relationships ..."):
+                report, err = api_client.trigger_relationships(doc_id)
+            _pipeline_reports(doc_id)["relationships"] = {
+                "report": report, "error": err}
+        st.rerun()
+    col_f, col_n, col_r = st.columns(3)
+    with col_f:
+        if st.button("EXTRACT FACTS", key=f"pipe_facts_{doc_id}", use_container_width=True):
+            with st.spinner("Running bounded fact extraction (real Groq calls) ..."):
+                report, err = api_client.trigger_facts(doc_id)
+            _pipeline_reports(doc_id)["facts"] = {"report": report, "error": err}
+            st.rerun()
+    with col_n:
+        if st.button("NORMALIZE", key=f"pipe_norm_{doc_id}", use_container_width=True):
+            with st.spinner("Running deterministic normalization ..."):
+                report, err = api_client.trigger_normalize(doc_id)
+            _pipeline_reports(doc_id)["normalize"] = {"report": report, "error": err}
+            st.rerun()
+    with col_r:
+        if st.button("FIND RELATIONSHIPS", key=f"pipe_rel_{doc_id}",
+                     use_container_width=True):
+            with st.spinner("Running relationship reasoning ..."):
+                report, err = api_client.trigger_relationships(doc_id)
+            _pipeline_reports(doc_id)["relationships"] = {"report": report, "error": err}
+            st.rerun()
+
+    stored = _pipeline_reports(doc_id)
+    _render_pipeline_status(stored)
+    facts_entry = stored.get("facts") or {}
+    if facts_entry.get("error") is not None:
+        st.error(f"Fact extraction failed: {facts_entry['error']}")
+    elif isinstance(facts_entry.get("report"), dict):
+        rep = facts_entry["report"]
+        st.markdown(
+            f"<div class='fact-meta'>extraction — processed "
+            f"<b>{rep.get('chunks_processed', '?')}</b> · failed "
+            f"<b>{rep.get('chunks_failed', '?')}</b> · skipped "
+            f"<b>{rep.get('chunks_skipped', '?')}</b> · capped "
+            f"<b>{rep.get('chunks_capped', '?')}</b> · facts "
+            f"<b>{len(rep.get('facts', []) or [])}</b> · rejected drafts "
+            f"<b>{rep.get('drafts_rejected', '?')}</b></div>",
+            unsafe_allow_html=True,
+        )
+        _render_report_errors(rep.get("errors"))
+    norm_entry = stored.get("normalize") or {}
+    if norm_entry.get("error") is not None:
+        st.error(f"Normalization failed: {norm_entry['error']}")
+    elif isinstance(norm_entry.get("report"), dict):
+        rep = norm_entry["report"]
+        st.markdown(
+            f"<div class='fact-meta'>normalization — processed "
+            f"<b>{rep.get('facts_processed', '?')}</b> · normalized "
+            f"<b>{rep.get('facts_normalized', '?')}</b> · flagged "
+            f"<b>{rep.get('facts_flagged', '?')}</b></div>",
+            unsafe_allow_html=True,
+        )
+        _render_report_errors(rep.get("errors"))
+    rel_entry = stored.get("relationships") or {}
+    if rel_entry.get("error") is not None:
+        st.error(f"Relationship reasoning failed: {rel_entry['error']}")
+    elif isinstance(rel_entry.get("report"), dict):
+        rep = rel_entry["report"]
+        st.markdown(
+            f"<div class='fact-meta'>relationships — candidates "
+            f"<b>{rep.get('candidates_evaluated', '?')}</b> · unrelated "
+            f"<b>{rep.get('unrelated_count', '?')}</b> · persisted "
+            f"<b>{len(rep.get('relationships', []) or [])}</b> · skipped existing "
+            f"<b>{rep.get('skipped_existing', '?')}</b></div>",
+            unsafe_allow_html=True,
+        )
+        _render_report_errors(rep.get("errors"))
+
+
 def _render_documents_tab(documents: list[dict]) -> None:
     st.markdown('<div class="section">DOCUMENTS</div>', unsafe_allow_html=True)
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
@@ -701,6 +848,7 @@ def _render_document_detail(documents: list[dict]) -> None:
                        unsafe_allow_html=True)
     counts[2].markdown(f"<div class='fact-meta'>Relationships<br><b>{rel_count}</b></div>",
                        unsafe_allow_html=True)
+    _render_pipeline(doc_id)
     if document.get("error"):
         st.error(f"Processing error: {document['error']}")
     bad = [p for p in pages if p.get("error")]

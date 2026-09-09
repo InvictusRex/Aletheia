@@ -16,6 +16,10 @@ ENV_VAR = "ALETHEIA_API_URL"
 
 _READ_TIMEOUT = 30
 _UPLOAD_TIMEOUT = 300
+# Fact extraction is bounded (representative chunks, serial Groq calls
+# with pacing/backoff), but a full run can still take several minutes.
+_PIPELINE_TIMEOUT = 900
+_RELATIONSHIPS_TIMEOUT = 600
 
 
 def get_base_url() -> str:
@@ -167,3 +171,49 @@ def search(
         return resp.json(), None
     except Exception as exc:
         return None, f"API unreachable at {get_base_url()} — {_err(exc)}"
+
+
+def _post_pipeline_action(
+    path: str, timeout: int
+) -> tuple[dict | None, str | None]:
+    """POST a per-document pipeline action (facts/normalize/relationships).
+
+    Returns the backend report verbatim on success; surfaces backend
+    failures (including 503 extraction-unavailable and per-chunk errors
+    inside the report body) without synthesizing results.
+    """
+    try:
+        resp = requests.post(_url(path), timeout=timeout)
+        if resp.status_code == 404:
+            return None, "document not found"
+        if resp.status_code != 200:
+            detail = ""
+            try:
+                detail = str(resp.json().get("detail", resp.text[:300]))
+            except Exception:
+                detail = resp.text[:300]
+            return None, f"HTTP {resp.status_code}: {detail}"
+        return resp.json(), None
+    except Exception as exc:
+        return None, f"API unreachable at {get_base_url()} — {_err(exc)}"
+
+
+def trigger_facts(document_id: str) -> tuple[dict | None, str | None]:
+    """Run bounded fact extraction; report carries chunks/facts/errors."""
+    return _post_pipeline_action(
+        f"/documents/{document_id}/facts", _PIPELINE_TIMEOUT
+    )
+
+
+def trigger_normalize(document_id: str) -> tuple[dict | None, str | None]:
+    """Run deterministic normalization; report carries counts/errors."""
+    return _post_pipeline_action(
+        f"/documents/{document_id}/normalize", _READ_TIMEOUT
+    )
+
+
+def trigger_relationships(document_id: str) -> tuple[dict | None, str | None]:
+    """Run relationship reasoning; report carries relationship counts."""
+    return _post_pipeline_action(
+        f"/documents/{document_id}/relationships", _RELATIONSHIPS_TIMEOUT
+    )
