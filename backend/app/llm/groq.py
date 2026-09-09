@@ -1,10 +1,26 @@
-"""Groq fact-extraction provider.
+"""Groq fact-extraction provider (serial, one chunk per request).
 
 Document-agnostic adapter between the frozen ``LLMProvider`` protocol
 (``app.llm.provider``) and Groq's OpenAI-compatible API
 (``https://api.groq.com/openai/v1``) via the official ``groq`` SDK.
 
+Operational contract:
+
+- One bounded semantic chunk per request, called serially by the
+  service layer (exactly one active extraction worker).
+- Minimum 2.5s between request starts via the shared
+  :class:`RateLimiter` (pure interval pacing, no token scheduling).
+- Deterministic generation: ``temperature=0``.
+- Conservative output: ``max_tokens=2000`` hard cap; the prompt asks
+  for concise structured facts only, so real output is far smaller.
+- Plain JSON output + local Pydantic validation (no provider-side
+  strict-schema machinery). Model text is cleaned (markdown fences,
+  surrounding prose) and truncated-output repair is attempted; if the
+  response still cannot be parsed/validated the chunk is marked failed
+  and processing continues — facts are never fabricated.
+
 Contract (matches ``app.llm.provider`` exactly):
+
 - returns ``FactExtractionBatch(drafts, model)``;
 - exposes ``model_name: str`` + ``extract_facts(prompt)``;
 - raises only ``LLMError`` subclasses for provider failures;
@@ -14,32 +30,21 @@ Lazy SDK rule: ``from groq import ...`` happens ONLY inside methods, so
 importing this module never requires the SDK. A missing SDK at call time
 raises ``LLMUnavailableError`` (never ``ImportError``).
 
-Strict JSON Schema (Groq requirement, verified against the actual
-Pydantic output for ``FactDraft``):
-- every object gets ``"additionalProperties": false``;
-- every object lists ALL of its properties in ``required``;
-- local ``#/$defs/...`` references are inlined (the only ``$ref`` form
-  Pydantic emits for these models; anything else raises loudly rather
-  than shipping a schema Groq cannot enforce);
-- ``default``/``title``/``description``/``format``/length and numeric
-  bounds are dropped — Pydantic re-validates every item afterward, so no
-  semantic constraint is lost, only wire-level hints strict mode rejects.
-- ``anyOf`` (Optional fields) is preserved as-is.
-
 Retry policy: up to ``max_retries`` retries (total attempts = 1 +
-``max_retries``) on transient failures ONLY (rate limits, timeouts,
-connection errors, server errors, parse failures) with bounded
-exponential backoff plus jitter — honoring provider ``Retry-After``
-subject to ``backoff_max_s``. Deterministic 4xx failures
-(authentication, bad request, permission, not-found) are raised
-immediately without retry. Pacing of request starts goes through the
-shared :class:`RateLimiter`.
+``max_retries``) on transient failures ONLY (rate limits / HTTP 429,
+timeouts, connection errors, server errors, parse failures) with
+bounded exponential backoff plus jitter — honoring provider
+``Retry-After`` subject to ``backoff_max_s``. Deterministic 4xx
+failures (authentication, bad request, permission, not-found) are
+raised immediately without retry. Pacing of request starts goes through
+the shared :class:`RateLimiter`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -49,7 +54,7 @@ from app.models import FactDraft
 from app.llm.rate_limit import (
     RateLimiter,
     compute_backoff_delay,
-    estimate_tokens,
+    extract_total_tokens,
     retry_after_seconds,
 )
 from app.llm.provider import (
@@ -62,6 +67,13 @@ from app.llm.provider import (
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
+#: Deterministic generation for fact extraction.
+EXTRACTION_TEMPERATURE = 0.0
+
+#: Hard output cap. Prompts normally produce far less; input + output
+#: both count toward the provider TPM limit, so this stays conservative.
+EXTRACTION_MAX_OUTPUT_TOKENS = 2000
+
 logger = logging.getLogger(__name__)
 
 _SDK_INSTALL_GUIDANCE = (
@@ -72,104 +84,116 @@ _SDK_INSTALL_GUIDANCE = (
 
 _RAW_SNIPPET_LIMIT = 500
 
-_STRICT_KEEP_KEYS = frozenset(
-    {"type", "enum", "properties", "required", "additionalProperties",
-     "items", "anyOf"}
-)
-
 __all__ = [
     "DEFAULT_GROQ_MODEL",
+    "EXTRACTION_MAX_OUTPUT_TOKENS",
+    "EXTRACTION_TEMPERATURE",
     "GroqFactsProvider",
-    "build_groq_schema",
-    "to_strict_schema",
+    "clean_json_text",
+    "repair_truncated_json",
 ]
 
 
-def _inline_refs(node: Any, defs: dict[str, Any], seen: frozenset = frozenset()) -> Any:
-    """Inline local ``#/$defs/...`` references from ``defs``."""
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str):
-            if not ref.startswith("#/$defs/"):
-                raise ValueError(f"unsupported non-local $ref: {ref!r}")
-            name = ref[len("#/$defs/"):]
-            if name in seen:
-                raise ValueError(f"cyclic $ref: {ref!r}")
-            if name not in defs:
-                raise ValueError(f"unresolvable $ref: {ref!r}")
-            target = {k: v for k, v in defs[name].items() if k != "$ref"}
-            return _inline_refs(target, defs, seen | {name})
-        return {k: _inline_refs(v, defs, seen) for k, v in node.items()}
-    if isinstance(node, list):
-        return [_inline_refs(v, defs, seen) for v in node]
-    return node
+def clean_json_text(content: str) -> str:
+    """Strip fences and isolate the JSON payload (pure function).
 
-
-def _strict_node(node: Any) -> Any:
-    """Enforce strict-mode object rules; drop non-essential keywords.
-
-    ``properties`` (and ``$defs``) map field names to subschemas, so
-    their keys are preserved verbatim — only schema-keyword positions
-    are filtered.
+    Handles markdown code fences, surrounding whitespace, and harmless
+    prose around the object/array. Returns the stripped candidate;
+    raises no error — ``json.loads`` validates afterward.
     """
-    if isinstance(node, dict):
-        result: dict[str, Any] = {}
-        for key, value in node.items():
-            if key in ("properties", "$defs") and isinstance(value, dict):
-                result[key] = {
-                    name: _strict_node(sub) for name, sub in value.items()
-                }
-            elif key in _STRICT_KEEP_KEYS:
-                result[key] = _strict_node(value)
-        if result.get("type") == "object":
-            props = result.get("properties")
-            if props is None:
-                # Free-form object (e.g. an arbitrary ``dict`` field):
-                # strict mode demands ``additionalProperties: false`` on
-                # every object yet rejects empty ``properties`` mappings
-                # and ``required``-without-``properties`` alike, so open
-                # content is unrepresentable. Emit the minimal closed
-                # shape: the model cannot populate this field, and
-                # Pydantic fills its default afterward. Documented
-                # limitation, not silent loss (callers see the empty
-                # value explicitly).
-                return {"type": "object", "additionalProperties": False}
-            if not isinstance(props, dict):
-                raise ValueError("object schema without properties mapping")
-            result["required"] = sorted(props)
-            result["additionalProperties"] = False
-        return result
-    if isinstance(node, list):
-        return [_strict_node(v) for v in node]
-    return node
+    text = content.strip()
+    # Remove markdown code fences (```json ... ``` or ``` ... ```).
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+    text = text.strip()
+    # Isolate the JSON object/array when wrapped in prose.
+    obj_start = text.find("{")
+    arr_start = text.find("[")
+    starts = [p for p in (obj_start, arr_start) if p != -1]
+    if starts:
+        start = min(starts)
+        if start > 0:
+            text = text[start:]
+    if text.startswith("{"):
+        end = text.rfind("}")
+        if end != -1:
+            text = text[: end + 1]
+    elif text.startswith("["):
+        end = text.rfind("]")
+        if end != -1:
+            text = text[: end + 1]
+    return text.strip()
 
 
-def to_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    """Convert a Pydantic JSON schema into Groq strict-mode form.
+def repair_truncated_json(content: str) -> str:
+    """Attempt safe recovery of truncated JSON (pure function).
 
-    Inlines ``$defs``, requires all properties, pins
-    ``additionalProperties: false``, and drops wire-level hints strict
-    mode rejects. Returns a new structure; the input is not mutated.
+    Conservative by construction: a repaired candidate is returned ONLY
+    when it parses as JSON. Candidates are built by truncating to the
+    end of a complete value (longest first) — or by closing one trailing
+    unterminated string with exactly what the model already wrote — then
+    closing any open brackets/braces. Model-written content is never
+    altered and no fact fields are invented; the repaired payload is
+    still fully validated by Pydantic afterward, so unrecoverable output
+    (dangling keys, missing values) simply fails validation and the
+    chunk is recorded as failed/retried instead of fabricated.
     """
-    if not isinstance(schema, dict) or schema.get("type") != "object":
-        raise ValueError("strict root schema must be a JSON object schema")
-    defs = dict(schema.get("$defs", {}))
-    body = {k: v for k, v in schema.items() if k != "$defs"}
-    return _strict_node(_inline_refs(body, defs))
+    text = content.strip()
+    try:
+        json.loads(text)
+        return text
+    except json.JSONDecodeError:
+        pass
 
+    # Single scan: container stack + string state. Snapshot the open
+    # stack at the end of every complete value so candidates can be
+    # tried longest-first without rescanning.
+    snapshots: list[tuple[int, list[str]]] = []  # (end_index, open stack)
+    stack: list[str] = []
+    in_string = False
+    escape = False
+    for i, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+                snapshots.append((i + 1, list(stack)))
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append(char)
+        elif char in "}]":
+            if stack:
+                stack.pop()
+            snapshots.append((i + 1, list(stack)))
 
-def build_groq_schema() -> dict[str, Any]:
-    """Build the strict response schema for ``{"drafts": [FactDraft]}``."""
-    draft_schema = FactDraft.model_json_schema()
-    defs = draft_schema.pop("$defs", None)
-    schema: dict[str, Any] = {
-        "type": "object",
-        "properties": {"drafts": {"type": "array", "items": draft_schema}},
-        "required": ["drafts"],
-    }
-    if defs:
-        schema["$defs"] = defs
-    return to_strict_schema(schema)
+    def _closers(opens: list[str]) -> str:
+        return "".join("}" if o == "{" else "]" for o in reversed(opens))
+
+    # Longest candidate first: close one trailing unterminated string
+    # using only the model's own characters, then close containers.
+    if in_string:
+        candidate = text + '"' + _closers(stack)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    for end, opens in reversed(snapshots):
+        candidate = text[:end] + _closers(opens)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+    # Unrecoverable (e.g. a dangling key with no value): return the
+    # original so the caller raises a decode failure and the chunk is
+    # marked failed — never invent the missing value.
+    return text
 
 
 class _UnparseableOutput(Exception):
@@ -182,19 +206,13 @@ class _UnparseableOutput(Exception):
 
 
 def _load_payload(raw_text: str) -> Any:
-    """Parse raw model text as JSON, tolerating markdown code fences."""
+    """Parse raw model text as JSON with fence/prose tolerance + repair."""
+    cleaned = clean_json_text(raw_text)
     try:
-        return json.loads(raw_text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
-        stripped = raw_text.strip()
-        if not stripped.startswith("```"):
-            raise
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        return json.loads("\n".join(lines))
+        repaired = repair_truncated_json(cleaned)
+        return json.loads(repaired)
 
 
 def _parse_drafts(raw_text: Any) -> list[FactDraft]:
@@ -227,11 +245,11 @@ class GroqFactsProvider:
         api_key: str,
         model: str = DEFAULT_GROQ_MODEL,
         timeout_s: int = 60,
-        max_retries: int = 2,
+        max_retries: int = 5,
         limiter: RateLimiter | None = None,
-        expected_output_tokens: int = 1000,
         backoff_base_s: float = 1.0,
         backoff_max_s: float = 60.0,
+        max_output_tokens: int = EXTRACTION_MAX_OUTPUT_TOKENS,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -241,9 +259,9 @@ class GroqFactsProvider:
         # process-global shared limiter; direct constructions (tests)
         # pace nothing and stay fast/deterministic.
         self._limiter = limiter
-        self._expected_output_tokens = max(0, int(expected_output_tokens))
         self._backoff_base_s = max(0.0, float(backoff_base_s))
         self._backoff_max_s = max(0.0, float(backoff_max_s))
+        self._max_output_tokens = max(1, int(max_output_tokens))
 
     @property
     def model_name(self) -> str:
@@ -253,7 +271,9 @@ class GroqFactsProvider:
     def extract_facts(self, prompt: str) -> FactExtractionBatch:
         """Send a ready-made prompt and return the validated batch.
 
-        Raises:
+        One chunk per call; the caller runs calls serially with ≥2.5s
+        start spacing. Raises:
+
             ValueError: on an empty prompt (caller bug, not retried).
             LLMUnavailableError: when the ``groq`` SDK is missing.
             LLMTimeoutError: when SDK calls time out on every attempt.
@@ -279,22 +299,12 @@ class GroqFactsProvider:
         except ImportError as exc:
             raise LLMUnavailableError(_SDK_INSTALL_GUIDANCE) from exc
 
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "fact_extraction",
-                "schema": build_groq_schema(),
-                "strict": True,
-            },
-        }
         client = Groq(api_key=self._api_key)
 
         def _pace_and_maybe_wait() -> None:
             if self._limiter is None:
                 return
-            self._limiter.acquire(
-                estimate_tokens(prompt) + self._expected_output_tokens
-            )
+            self._limiter.acquire()
 
         def _backoff(retry_number: int, exc: BaseException) -> None:
             delay = compute_backoff_delay(
@@ -321,11 +331,13 @@ class GroqFactsProvider:
             last = attempt >= attempts
             _pace_and_maybe_wait()
             try:
-                # Single SDK call site in this codebase.
+                # Single SDK call site in this codebase: one chunk per
+                # request, deterministic output, conservative cap.
                 response = client.chat.completions.create(
                     model=self._model,
                     messages=[{"role": "user", "content": prompt}],
-                    response_format=response_format,
+                    temperature=EXTRACTION_TEMPERATURE,
+                    max_tokens=self._max_output_tokens,
                     timeout=self._timeout_s,
                 )
             except (APITimeoutError, TimeoutError) as exc:
@@ -367,5 +379,22 @@ class GroqFactsProvider:
                     ) from exc
                 _backoff(attempt, exc)
                 continue
+            self._log_usage(response)
             return FactExtractionBatch(drafts=drafts, model=self._model)
         raise AssertionError("unreachable: retry loop always returns or raises")  # pragma: no cover
+
+    def _log_usage(self, response: object) -> None:
+        """Log provider-reported token usage (numbers only, best-effort).
+
+        Observability for the acceptance run: input + output totals per
+        request. Never affects extraction.
+        """
+        try:
+            total = extract_total_tokens(response)
+            if total is None:
+                return
+            logger.info(
+                "Groq usage model=%s total_tokens=%d", self._model, total
+            )
+        except Exception:
+            return

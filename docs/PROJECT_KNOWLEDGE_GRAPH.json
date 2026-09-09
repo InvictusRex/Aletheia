@@ -171,6 +171,13 @@
       "rationale": "Gemini abandoned: OpenAI-compatible API with strict structured outputs; Pydantic schemas mechanically converted (additionalProperties:false, required-all, inlined refs); lazy SDK, bounded retries, no behavior change elsewhere.",
       "status": "accepted",
       "title": "Groq provider replacing Gemini"
+    },
+    {
+      "date": "2026-09-09",
+      "id": "decision-021-rate-limits",
+      "rationale": "Reliable real inference over throughput: one chunk per request, single worker, 2.5s start spacing; deterministic 4xx never retried; no batching, no token scheduling.",
+      "status": "accepted",
+      "title": "Serial Groq extraction with interval pacing and bounded backoff"
     }
   ],
   "deviations_from_plan": [
@@ -183,13 +190,15 @@
   ],
   "implementation_state": {
     "phase": "backend-feature-complete",
-    "testing": "pytest 170 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching, llm-schema, search)",
+    "testing": "pytest 185 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching, search, serial Groq pacing/retry/JSON)",
     "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live; no ANN index (exact scan at prototype scale)",
     "notes": [
       "Backend feature-complete for core assignment (Phases 0-10); frontend next.",
       "Live POST /search verified: ranked facts with evidence/provenance, document filtering, read-only.",
       "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
-      "LLM provider is Groq (openai/gpt-oss-120b); live fact + judgment smoke tests passed."
+      "LLM provider is Groq (openai/gpt-oss-120b); live fact + judgment smoke tests passed.",
+      "Groq request management: serial one-chunk-per-request, 2.5s start spacing, temperature 0, 2000 max output tokens, 5 bounded retries honoring Retry-After.",
+      "Next: macro acceptance dataset run, then Phase 11 frontend."
     ]
   },
   "invariants": [
@@ -380,6 +389,24 @@
       "id": "search-tests",
       "path": "backend/tests/test_search.py + test_llm_schema.py",
       "responsibility": "Search behavior/contract tests with faked embeddings; schema sanitizer unit tests; no network or keys.",
+      "type": "testing"
+    },
+    {
+      "id": "request-pacing",
+      "path": "backend/app/llm/rate_limit.py",
+      "responsibility": "Serial 2.5s start-interval pacing (no token scheduling), bounded exponential backoff with Retry-After; injected fakes in tests.",
+      "type": "component"
+    },
+    {
+      "id": "evidence-batching",
+      "path": "backend/app/facts/service.py (removed module)",
+      "responsibility": "REMOVED: was token-aware grouping of chunks into requests; now one chunk per request, tables atomic via chunking, IDs preserved.",
+      "type": "component"
+    },
+    {
+      "id": "rate-limit-tests",
+      "path": "backend/tests/test_rate_limit.py",
+      "responsibility": "Serial pacing/backoff/Retry-After unit tests with fake clocks; JSON clean/repair tests; provider retry tests with faked SDK; no network or real sleeps.",
       "type": "testing"
     }
   ],
@@ -672,6 +699,31 @@
     {
       "source": "search-tests",
       "target": "search-api",
+      "type": "covers"
+    },
+    {
+      "source": "fact-pipeline",
+      "target": "evidence-batching",
+      "type": "invokes"
+    },
+    {
+      "source": "llm-provider",
+      "target": "request-pacing",
+      "type": "invokes"
+    },
+    {
+      "source": "relationship-llm",
+      "target": "request-pacing",
+      "type": "invokes"
+    },
+    {
+      "source": "rate-limit-tests",
+      "target": "request-pacing",
+      "type": "covers"
+    },
+    {
+      "source": "rate-limit-tests",
+      "target": "evidence-batching",
       "type": "covers"
     }
   ],

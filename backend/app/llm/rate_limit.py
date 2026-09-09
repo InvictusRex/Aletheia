@@ -1,17 +1,18 @@
-"""Groq request management: token estimation, global pacing, backoff.
+"""Groq request pacing and retry helpers.
 
-Free-tier reality (RPM 30 / TPM 8K) demands conservative local control:
+Operational model (deliberately boring):
 
-- :func:`estimate_tokens` — deterministic, dependency-free character
-  heuristic (documented approximation, monotonic in input length).
-- :class:`RateLimiter` — process-global pacing: minimum interval between
-  request starts plus a rolling 60-second token budget. Thread-safe.
-  Tests inject fake clock/sleeper; production uses real time.
-- :func:`compute_backoff_delay` — bounded exponential backoff with
-  equal jitter, honoring provider ``Retry-After`` subject to a cap.
+- Exactly one active Groq extraction worker (the service layer calls
+  providers serially, one chunk per request).
+- Minimum 2.5 seconds between request START times, enforced by
+  :class:`RateLimiter`.
+- Bounded exponential backoff with jitter for real transient failures,
+  honoring provider ``Retry-After`` subject to a cap.
 
-Nothing here performs I/O. Providers call :meth:`RateLimiter.acquire`
-before each attempt and sleep the computed backoff between retries.
+There is intentionally NO token-aware scheduling here: no TPM targets,
+no token budgets, no token windows, no request packing, no throughput
+optimization. Per-request token totals are usage-logged by callers for
+observability only.
 """
 
 from __future__ import annotations
@@ -19,38 +20,14 @@ from __future__ import annotations
 import random
 import threading
 import time
-from collections import deque
 
 __all__ = [
     "RateLimiter",
     "compute_backoff_delay",
-    "estimate_tokens",
+    "extract_total_tokens",
     "get_shared_limiter",
     "retry_after_seconds",
 ]
-
-# Conservative character heuristic: ~4 chars/token is typical for mixed
-# prose/IDs; using 4 keeps batches useful while the TPM target below
-# carries the real safety margin. Deterministic and monotonic.
-_CHARS_PER_TOKEN = 4
-
-_WINDOW_SECONDS = 60.0
-# Upper bound so a single acquire never sleeps longer than this per
-# iteration; the loop re-evaluates (also keeps fake-clock tests exact).
-_MAX_SLEEP_STEP = 5.0
-
-
-def estimate_tokens(text: str) -> int:
-    """Approximate token count for pacing/batching decisions.
-
-    Deliberately approximate (never exact billing): ``ceil(bytes/4)``,
-    minimum 1. Monotonic in input length. Do NOT use for correctness
-    decisions, only for conservative budgeting.
-    """
-    if not isinstance(text, str):
-        return 1
-    size = len(text.encode("utf-8", errors="ignore"))
-    return max(1, -(-size // _CHARS_PER_TOKEN))
 
 
 def retry_after_seconds(exc: BaseException) -> float | None:
@@ -117,69 +94,78 @@ def compute_backoff_delay(
 
 
 class RateLimiter:
-    """Global request pacing: start-interval plus rolling token budget.
+    """Process-global serial pacing: minimum interval between starts.
 
-    ``acquire(estimated_tokens)`` blocks until both (a) at least
-    ``min_interval_s`` elapsed since the previous recorded start and
-    (b) tokens started in the trailing 60 s plus the estimate fit within
-    ``tpm_target`` — then records this start and returns seconds waited.
-    Thread-safe: sleeps happen outside the lock with re-evaluation, so
-    concurrent callers cannot bypass the limits.
+    ``acquire()`` blocks until at least ``min_interval_s`` elapsed since
+    the previous recorded start, then records this start and returns
+    seconds waited. Thread-safe: sleeps happen outside the lock with
+    re-evaluation, so concurrent callers cannot bypass the limit.
+
+    The service layer runs exactly one extraction worker, so in practice
+    there is no contention — the limiter simply spaces serial requests.
     """
 
     def __init__(
         self,
         min_interval_s: float = 2.5,
-        tpm_target: float = 6500.0,
         clock=time.monotonic,
         sleeper=time.sleep,
     ) -> None:
         self._min_interval_s = max(0.0, float(min_interval_s))
-        self._tpm_target = max(0.0, float(tpm_target))
         self._clock = clock
         self._sleeper = sleeper
         self._lock = threading.Lock()
-        self._starts: deque[float] = deque()
-        self._tokens: deque[tuple[float, int]] = deque()
+        self._last_start: float | None = None
 
     def sleep(self, seconds: float) -> None:
         """Sleep through the injected sleeper (tests substitute fakes)."""
         if seconds > 0:
             self._sleeper(seconds)
 
-    def _evict(self, now: float) -> None:
-        while self._starts and now - self._starts[0] >= _WINDOW_SECONDS:
-            self._starts.popleft()
-        while self._tokens and now - self._tokens[0][0] >= _WINDOW_SECONDS:
-            self._tokens.popleft()
-
-    def _wait_for(self, estimated_tokens: int, now: float) -> float:
-        wait = 0.0
-        if self._starts:
-            wait = max(wait, self._min_interval_s - (now - self._starts[-1]))
-        windowed = sum(tokens for _, tokens in self._tokens)
-        if windowed + estimated_tokens > self._tpm_target:
-            oldest = self._tokens[0][0]
-            wait = max(wait, (oldest + _WINDOW_SECONDS) - now)
-        return max(0.0, wait)
-
-    def acquire(self, estimated_tokens: int) -> float:
+    def acquire(self) -> float:
         """Block until a request may start; return seconds waited."""
-        estimated = max(0, int(estimated_tokens))
         waited = 0.0
         while True:
             with self._lock:
                 now = self._clock()
-                self._evict(now)
-                delay = self._wait_for(estimated, now)
-                if delay <= 0:
-                    started = self._clock()
-                    self._starts.append(started)
-                    self._tokens.append((started, estimated))
+                if self._last_start is None:
+                    self._last_start = now
                     return waited
-            step = min(delay, _MAX_SLEEP_STEP)
-            self._sleeper(step)
-            waited += step
+                delay = self._min_interval_s - (now - self._last_start)
+                if delay <= 0:
+                    self._last_start = now
+                    return waited
+            self._sleeper(delay)
+            waited += delay
+
+
+def extract_total_tokens(response: object) -> int | None:
+    """Read total (input + output) tokens from a provider response.
+
+    Understands OpenAI-compatible ``usage`` payloads as either
+    attributes or mappings (``total_tokens``, else prompt+completion).
+    Returns None when unavailable or invalid. Never raises.
+    """
+    try:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        if isinstance(usage, dict):
+            total = usage.get("total_tokens")
+            if total is None:
+                prompt = usage.get("prompt_tokens", 0)
+                completion = usage.get("completion_tokens", 0)
+                total = prompt + completion
+        else:
+            total = getattr(usage, "total_tokens", None)
+            if total is None:
+                prompt = getattr(usage, "prompt_tokens", 0) or 0
+                completion = getattr(usage, "completion_tokens", 0) or 0
+                total = prompt + completion
+        total = int(total)
+        return total if total >= 0 else None
+    except Exception:
+        return None
 
 
 _shared_limiter: RateLimiter | None = None
@@ -189,9 +175,9 @@ _shared_lock = threading.Lock()
 def get_shared_limiter() -> RateLimiter:
     """Process-global limiter configured from application settings.
 
-    Created once on first use so every provider instance and transport
-    paces through the same limiter. Import of settings is deferred to
-    call time to keep module import side-effect free.
+    Created once on first use so every provider instance paces through
+    the same limiter. Import of settings is deferred to call time to
+    keep module import side-effect free.
     """
     global _shared_limiter
     if _shared_limiter is None:
@@ -201,6 +187,5 @@ def get_shared_limiter() -> RateLimiter:
 
                 _shared_limiter = RateLimiter(
                     min_interval_s=settings.groq_min_request_interval_s,
-                    tpm_target=settings.groq_tpm_target,
                 )
     return _shared_limiter

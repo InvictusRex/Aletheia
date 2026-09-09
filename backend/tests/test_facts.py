@@ -429,12 +429,7 @@ def test_service_persists_and_retrieves_facts_with_report_counts(db_session):
 # ---------------------------------------------------------------------------
 
 
-def test_service_transport_error_mid_run_is_contained(db_session, monkeypatch):
-    # Shrink the request token budget so the two page-chunks cannot share
-    # one request batch: token-aware batching then yields two single-chunk
-    # batches (two requests), preserving this test's mid-run-failure
-    # scenario. All assertions below are unchanged.
-    monkeypatch.setattr(settings, "groq_max_input_tokens_per_request", 100)
+def test_service_transport_error_mid_run_is_contained(db_session):
     document, _, _ = _ingest(
         db_session,
         "two-page.pdf",

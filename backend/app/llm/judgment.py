@@ -22,7 +22,7 @@ from typing import Protocol
 from app.llm.rate_limit import (
     RateLimiter,
     compute_backoff_delay,
-    estimate_tokens,
+    extract_total_tokens,
     retry_after_seconds,
 )
 from app.llm.provider import (
@@ -39,6 +39,10 @@ from app.models.relationship import (
 )
 
 DEFAULT_JUDGMENT_MODEL = "openai/gpt-oss-120b"
+
+#: Deterministic judgment; small bounded output (one JSON verdict).
+_JUDGMENT_TEMPERATURE = 0.0
+_JUDGMENT_MAX_OUTPUT_TOKENS = 800
 
 _SDK_INSTALL_GUIDANCE = (
     "The 'groq' SDK is not installed. Install it with "
@@ -324,7 +328,6 @@ class GroqJudgmentTransport:
         timeout_s: int = 60,
         max_retries: int = 2,
         limiter: RateLimiter | None = None,
-        expected_output_tokens: int = 1000,
         backoff_base_s: float = 1.0,
         backoff_max_s: float = 60.0,
     ) -> None:
@@ -333,7 +336,6 @@ class GroqJudgmentTransport:
         self._timeout_s = timeout_s
         self._max_retries = max(0, int(max_retries))
         self._limiter = limiter
-        self._expected_output_tokens = max(0, int(expected_output_tokens))
         self._backoff_base_s = max(0.0, float(backoff_base_s))
         self._backoff_max_s = max(0.0, float(backoff_max_s))
 
@@ -373,9 +375,7 @@ class GroqJudgmentTransport:
         def _pace_and_maybe_wait() -> None:
             if self._limiter is None:
                 return
-            self._limiter.acquire(
-                estimate_tokens(prompt) + self._expected_output_tokens
-            )
+            self._limiter.acquire()
 
         def _backoff(retry_number: int, exc: BaseException) -> None:
             delay = compute_backoff_delay(
@@ -406,6 +406,8 @@ class GroqJudgmentTransport:
                 response = client.chat.completions.create(
                     model=self._model,
                     messages=[{"role": "user", "content": prompt}],
+                    temperature=_JUDGMENT_TEMPERATURE,
+                    max_tokens=_JUDGMENT_MAX_OUTPUT_TOKENS,
                     timeout=self._timeout_s,
                 )
             except (APITimeoutError, TimeoutError) as exc:
@@ -445,8 +447,24 @@ class GroqJudgmentTransport:
                     ) from exc
                 _backoff(attempt, exc)
                 continue
+            self._log_usage(response)
             return text
         raise AssertionError("unreachable: retry loop always returns or raises")  # pragma: no cover
+
+    def _log_usage(self, response: object) -> None:
+        """Log provider-reported token usage (numbers only, best-effort).
+
+        Never affects judgment. See GroqFactsProvider.
+        """
+        try:
+            total = extract_total_tokens(response)
+            if total is None:
+                return
+            logger.info(
+                "Groq usage model=%s total_tokens=%d", self._model, total
+            )
+        except Exception:
+            return
 
 
 def judge_pair(

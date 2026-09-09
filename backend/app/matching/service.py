@@ -82,7 +82,6 @@ def get_judgment_transport() -> GroqJudgmentTransport | None:
         timeout_s=settings.fact_llm_timeout_s,
         max_retries=settings.groq_max_retries,
         limiter=get_shared_limiter(),
-        expected_output_tokens=settings.groq_expected_output_tokens,
         backoff_base_s=settings.groq_backoff_base_s,
         backoff_max_s=settings.groq_backoff_max_s,
     )

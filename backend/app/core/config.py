@@ -30,14 +30,11 @@ class Settings(BaseSettings):
     # Fact extraction bounds (evidence-scoped LLM calls only).
     fact_chunk_max_chars: int = Field(default=6000)
     fact_llm_timeout_s: int = Field(default=60)
-    fact_llm_max_retries: int = Field(default=2)
 
     # Groq request management (free-tier aware). Kept explicit and
-    # separate: request-size limit, token budget, RPM spacing, and
-    # retry/backoff bounds are independent knobs.
-    groq_max_input_tokens_per_request: int = Field(default=2000)
-    groq_expected_output_tokens: int = Field(default=1000)
-    groq_tpm_target: float = Field(default=6500.0)
+    # separate: RPM spacing and retry/backoff bounds are independent
+    # knobs. Requests are paced only by start-interval; per-request
+    # token totals are usage-logged for observability.
     groq_min_request_interval_s: float = Field(default=2.5)
     groq_max_retries: int = Field(default=5)
     groq_backoff_base_s: float = Field(default=1.0)

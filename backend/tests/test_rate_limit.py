@@ -1,12 +1,18 @@
-"""Tests: token estimator, global pacing, backoff, retry mapping.
+"""Tests: serial pacing, backoff, retry mapping, JSON parsing.
 
 No network, no real sleeps, no randomness outside seeded generators:
 time and randomness are injected fakes throughout.
+
+Operational contract under test:
+
+- One chunk per Groq request, serial execution, >=2.5s start spacing.
+- No token scheduling of any kind.
+- Bounded exponential backoff honoring Retry-After.
+- Robust JSON cleaning/repair + Pydantic validation (no fabrication).
 """
 
 import random
 import sys
-import threading
 import types
 
 import pytest
@@ -14,7 +20,6 @@ import pytest
 from app.llm.rate_limit import (
     RateLimiter,
     compute_backoff_delay,
-    estimate_tokens,
     retry_after_seconds,
 )
 
@@ -40,67 +45,40 @@ class FakeSleeper:
 def make_limiter(**overrides):
     clock = FakeClock()
     sleeper = FakeSleeper(clock)
-    params = {"min_interval_s": 2.5, "tpm_target": 6500.0}
+    params = {"min_interval_s": 2.5}
     params.update(overrides)
     limiter = RateLimiter(clock=clock, sleeper=sleeper, **params)
     return limiter, clock, sleeper
 
 
 # ---------------------------------------------------------------------------
-# A. Token estimator
-# ---------------------------------------------------------------------------
-
-
-def test_estimate_tokens_monotonic_and_bounded():
-    assert estimate_tokens("") >= 1
-    short = estimate_tokens("hello")
-    long = estimate_tokens("hello world, this is much longer text")
-    assert 0 < short <= long
-    assert estimate_tokens("x" * 4000) >= estimate_tokens("x" * 40)
-
-
-# ---------------------------------------------------------------------------
-# B. Request spacing
+# A. Request spacing (serial pacing, no token machinery)
 # ---------------------------------------------------------------------------
 
 
 def test_second_request_waits_full_interval():
     limiter, _, sleeper = make_limiter()
-    assert limiter.acquire(10) == 0.0
-    assert limiter.acquire(10) == 2.5
+    assert limiter.acquire() == 0.0
+    assert limiter.acquire() == 2.5
     assert sleeper.slept == [2.5]
 
 
 def test_first_request_never_blocks():
     limiter, _, sleeper = make_limiter()
-    assert limiter.acquire(6000) == 0.0
+    assert limiter.acquire() == 0.0
+    assert sleeper.slept == []
+
+
+def test_interval_elapsed_does_not_block():
+    limiter, clock, sleeper = make_limiter()
+    assert limiter.acquire() == 0.0
+    clock.now += 10.0
+    assert limiter.acquire() == 0.0
     assert sleeper.slept == []
 
 
 # ---------------------------------------------------------------------------
-# C. Token pacing
-# ---------------------------------------------------------------------------
-
-
-def test_token_budget_blocks_until_window_rolls():
-    limiter, _, sleeper = make_limiter(tpm_target=100.0, min_interval_s=0.0)
-    assert limiter.acquire(90) == 0.0
-    # 90 used + 20 requested > 100: must wait until the first entry ages out.
-    # Sleeps happen in bounded steps; the total must equal the window wait.
-    assert limiter.acquire(20) == pytest.approx(60.0)
-    assert abs(sum(sleeper.slept) - 60.0) < 1e-9
-    assert all(step <= 5.0 + 1e-9 for step in sleeper.slept)
-
-
-def test_token_usage_under_budget_does_not_block():
-    limiter, _, sleeper = make_limiter(tpm_target=100.0, min_interval_s=0.0)
-    assert limiter.acquire(40) == 0.0
-    assert limiter.acquire(40) == 0.0
-    assert sleeper.slept == []
-
-
-# ---------------------------------------------------------------------------
-# D. Backoff math
+# B. Backoff math
 # ---------------------------------------------------------------------------
 
 
@@ -139,7 +117,7 @@ def test_backoff_deterministic_with_seeded_rng():
 
 
 # ---------------------------------------------------------------------------
-# E. Retry-After extraction
+# C. Retry-After extraction
 # ---------------------------------------------------------------------------
 
 
@@ -177,40 +155,34 @@ def test_retry_after_missing_or_garbage_is_none():
 
 
 # ---------------------------------------------------------------------------
-# F. Concurrency: shared limiter cannot be bypassed
+# D. Serial contract: one worker, sequential acquires accumulate spacing
 # ---------------------------------------------------------------------------
+# NOTE: there is deliberately NO multithreaded limiter test. Production
+# fact extraction runs exactly ONE worker (one chunk → one Groq request
+# → >=2.5s spacing → next chunk), so concurrent acquisition is out of
+# contract. A threaded test against an injected fake clock can livelock
+# on sub-ULP float dust (clock.now += tiny_delay is a no-op, so the
+# remaining delay never reaches zero) — a test-only artifact with no
+# production counterpart, since real sleeps always advance real time.
 
 
-def test_concurrent_acquires_stay_spaced():
-    limiter, _, _ = make_limiter(min_interval_s=0.05, tpm_target=10**9)
-    starts = []
-    lock = threading.Lock()
-
-    def worker():
-        limiter.acquire(1)
-        with lock:
-            starts.append(limiter._clock())
-
-    threads = [threading.Thread(target=worker) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-    assert len(starts) == 4
-    ordered = sorted(starts)
-    gaps = [b - a for a, b in zip(ordered, ordered[1:])]
-    assert all(gap >= 0.04 for gap in gaps)
+def test_serial_acquires_accumulate_spacing():
+    limiter, _, sleeper = make_limiter()
+    assert limiter.acquire() == 0.0
+    assert limiter.acquire() == 2.5
+    assert limiter.acquire() == 2.5
+    assert sleeper.slept == [2.5, 2.5]
 
 
 # ---------------------------------------------------------------------------
-# G. Retry behavior at the provider level (faked SDK via sys.modules)
+# E. Retry behavior at the provider level (faked SDK via sys.modules)
 # ---------------------------------------------------------------------------
 
 
 def _install_fake_groq(monkeypatch, behavior):
     """Install a fake ``groq`` module; behavior["calls"] maps 1-based call
     index to "boom"/"auth"/"timeout"/"rate_limit", else canned JSON wins."""
-    state = {"calls": 0, "sleeps": []}
+    state = {"calls": 0, "sleeps": [], "kwargs": []}
     calls = behavior.get("calls", {})
 
     class _Err(Exception):
@@ -269,6 +241,7 @@ def _install_fake_groq(monkeypatch, behavior):
     class FakeCompletions:
         def create(self, **kwargs):
             state["calls"] += 1
+            state["kwargs"].append(kwargs)
             action = calls.get(state["calls"])
             if action is None:
                 return FakeResponse(canned)
@@ -362,3 +335,59 @@ def test_timeout_retries_then_surfaces(monkeypatch):
     with pytest.raises(LLMTimeoutError):
         provider.extract_facts("extract facts about X")
     assert state["calls"] == 3
+
+
+def test_provider_uses_deterministic_conservative_params(monkeypatch):
+    from app.llm.groq import (
+        EXTRACTION_MAX_OUTPUT_TOKENS,
+        EXTRACTION_TEMPERATURE,
+        GroqFactsProvider,
+    )
+
+    state = _install_fake_groq(monkeypatch, {})
+    provider = GroqFactsProvider(api_key="k")
+    provider.extract_facts("extract facts about X")
+    assert state["calls"] == 1
+    kwargs = state["kwargs"][0]
+    assert kwargs["temperature"] == EXTRACTION_TEMPERATURE == 0
+    assert kwargs["max_tokens"] == EXTRACTION_MAX_OUTPUT_TOKENS == 2000
+
+
+# ---------------------------------------------------------------------------
+# F. JSON robustness (pure functions, no network)
+# ---------------------------------------------------------------------------
+
+
+def test_clean_json_strips_fences_and_prose():
+    from app.llm.groq import clean_json_text
+
+    assert clean_json_text('```json\n{"drafts": []}\n```') == '{"drafts": []}'
+    assert clean_json_text('```\n{"drafts": []}\n```') == '{"drafts": []}'
+    wrapped = 'Here is the result:\n{"drafts": []}\nHope this helps.'
+    assert clean_json_text(wrapped) == '{"drafts": []}'
+
+
+def test_repair_truncated_json_closes_structures():
+    import json
+
+    from app.llm.groq import repair_truncated_json
+
+    truncated = '{"drafts": [{"subject": "X"'
+    repaired = repair_truncated_json(truncated)
+    payload = json.loads(repaired)
+    assert isinstance(payload, dict)
+    assert "drafts" in payload
+
+
+def test_malformed_output_surfaces_without_fabrication(monkeypatch):
+    import time as _time
+    from app.llm.groq import GroqFactsProvider
+    from app.llm.provider import LLMMalformedError
+
+    state = _install_fake_groq(monkeypatch, {"canned": "not json at all {{{"})
+    monkeypatch.setattr(_time, "sleep", lambda s: state["sleeps"].append(s))
+    provider = GroqFactsProvider(
+        api_key="k", max_retries=1, backoff_base_s=0.0, backoff_max_s=0.0)
+    with pytest.raises(LLMMalformedError):
+        provider.extract_facts("extract facts about X")
+    assert state["calls"] == 2  # retried once, then surfaced — never guessed

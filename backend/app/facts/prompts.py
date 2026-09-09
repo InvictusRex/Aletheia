@@ -50,11 +50,13 @@ def build_extraction_prompt(chunk: EvidenceChunk) -> str:
     )
     lines.append(
         "2. Never invent, infer beyond what is written, or use outside "
-        "knowledge. Every claim must trace to cited evidence."
+        "knowledge. Every claim must trace to cited evidence. Do not "
+        "infer missing dates, units, entities, or values."
     )
     lines.append(
         "3. Preserve values verbatim as written in the evidence, including "
-        "their units and qualifiers; do not convert, round, or rephrase values."
+        "their units and qualifiers; do not convert, round, or rephrase values. "
+        "Do NOT perform unit conversion."
     )
     lines.append(
         "4. Each draft states a subject, a predicate, and a value, plus the "
@@ -73,6 +75,10 @@ def build_extraction_prompt(chunk: EvidenceChunk) -> str:
         "7. Flag ambiguity: set ambiguous to true and explain in notes "
         "whenever the evidence is unclear, conflicting, or admits "
         "multiple readings."
+    )
+    lines.append(
+        "8. Prefer fewer highly reliable facts over many speculative facts. "
+        "If a chunk is ambiguous, omit the fact."
     )
     lines.append("")
     lines.append(
@@ -112,6 +118,7 @@ def build_extraction_prompt(chunk: EvidenceChunk) -> str:
     lines.append('  "notes": ""')
     lines.append("}")
     lines.append(
-        "Return only the JSON object, with no surrounding commentary."
+        "Return only the JSON object, with no surrounding commentary, "
+        "no explanations, no reasoning traces, and no markdown fences."
     )
     return "\n".join(lines) + "\n"
