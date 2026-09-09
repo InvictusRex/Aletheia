@@ -6,6 +6,7 @@ COPY frontend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY frontend/app.py frontend/api.py ./
+COPY frontend/.streamlit ./.streamlit
 
 EXPOSE 8501
 

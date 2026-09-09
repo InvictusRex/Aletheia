@@ -1,11 +1,14 @@
-"""Aletheia — Fact Knowledge Layer (Streamlit frontend, single page).
+"""Aletheia - Fact Knowledge Layer (Streamlit frontend, single page).
 
-Dark technical interface over the real FastAPI backend. Fully data-driven:
-no hardcoded documents, facts, values, or explanations.
+Client of the real FastAPI backend. Fully data-driven: every document,
+fact, relationship, and evidence block rendered here comes from an API
+response. Empty backend state renders as an empty state, never as
+placeholder content.
 """
 
 from __future__ import annotations
 
+import html
 from datetime import datetime
 
 import streamlit as st
@@ -19,74 +22,79 @@ ERROR = "#FF4B3F"
 
 REL_TYPES = ["CORROBORATES", "CONTRADICTS", "CONTEXTUAL_DIFFERENCE", "RELATED"]
 
+# Minimal, non-invasive CSS. Only our own classes plus safe container and
+# color adjustments. Nothing hides or restructures Streamlit's internal
+# component DOM (FileUploader, Selectbox, TextInput must keep working).
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
-#MainMenu, footer, header [data-testid="stToolbar"], .stDeployButton,
-[data-testid="stStatusWidget"] { display: none !important; }
-header[data-testid="stHeader"] { background: #0B0B0B; }
-.stApp { background: #0B0B0B; color: #E8E8E8;
-  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif; }
-.block-container { max-width: 1200px; padding: 1.2rem 2rem 3rem; }
-.brand { font-size: 20px; font-weight: 700; letter-spacing: 0.22em; color: #E8E8E8; }
-.brand-sub { font-size: 12px; letter-spacing: 0.08em; color: #8A8A8A; margin-top: 2px; }
-.section-label { font-size: 11px; font-weight: 600; letter-spacing: 0.18em;
-  color: #8A8A8A; margin: 22px 0 8px; }
-.hr { border-top: 1px solid #202020; margin: 4px 0 12px; }
-div.stButton > button { background: #161616; color: #E8E8E8; border: 1px solid #2A2A2A;
-  border-radius: 3px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
-  padding: 6px 14px; }
-div.stButton > button:hover { border-color: #D0D500; color: #D0D500; }
-div.stButton > button[kind="primary"] { background: #D0D500; color: #111111;
-  border: 1px solid #D0D500; }
-div.stButton > button[kind="primary"]:hover { color: #111111; }
+.stApp { background: #0B0B0B; color: #E8E8E8; }
+#MainMenu, footer { display: none !important; }
+.block-container { max-width: 1480px; padding-top: 0.7rem;
+  padding-left: 1.5rem; padding-right: 1.5rem; padding-bottom: 3rem; }
+.navbar { display: flex; justify-content: space-between; align-items: flex-start;
+  border-bottom: 1px solid #202020; padding-bottom: 10px; }
+.brand { font-size: 22px; font-weight: 700; letter-spacing: 0.22em; }
+.brand-sub { font-size: 12px; letter-spacing: 0.1em; color: #8A8A8A; margin-top: 2px; }
+.section { font-size: 16px; font-weight: 700; letter-spacing: 0.16em;
+  color: #E8E8E8; margin: 18px 0 6px; }
+.hr { border-top: 1px solid #202020; margin: 2px 0 10px; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl th { text-align: left; font-size: 11.5px; font-weight: 600;
+  letter-spacing: 0.12em; color: #8A8A8A; padding: 6px 10px;
+  border-bottom: 1px solid #202020; }
+.tbl td { padding: 8px 10px; border-bottom: 1px solid #161616; color: #E8E8E8;
+  vertical-align: top; }
+.tbl tr:last-child td { border-bottom: none; }
+.doc-name { font-size: 14.5px; font-weight: 600; }
+.st-ok { color: #9AA29A; } .st-warn { color: #D0D500; } .st-err { color: #FF4B3F; }
 .fact { background: #111111; border: 1px solid #202020; border-left: 2px solid #3A3A3A;
-  border-radius: 3px; padding: 12px 14px; margin-bottom: 10px; }
-.fact-subj { font-size: 11px; font-weight: 600; letter-spacing: 0.14em;
+  border-radius: 3px; padding: 12px 16px; margin-bottom: 10px; }
+.fact-subj { font-size: 12.5px; font-weight: 600; letter-spacing: 0.12em;
   text-transform: uppercase; color: #8A8A8A; }
-.fact-pred { font-size: 14px; font-weight: 600; color: #E8E8E8; margin-top: 2px; }
-.fact-value { font-size: 22px; font-weight: 700; color: #E8E8E8; margin: 6px 0 2px; }
-.fact-norm { font-size: 12.5px; color: #8A8A8A; }
+.fact-pred { font-size: 17px; font-weight: 600; margin-top: 2px; }
+.fact-value { font-size: 25px; font-weight: 700; margin: 6px 0 2px; }
+.fact-norm-label { font-size: 11.5px; letter-spacing: 0.12em; color: #5F5F5F;
+  margin-top: 6px; }
+.fact-norm { font-size: 13.5px; color: #B5B5B5; }
 .fact-norm b { color: #D0D500; font-weight: 600; }
-.fact-meta { font-size: 12px; color: #5F5F5F; margin-top: 6px; }
+.fact-meta { font-size: 12.5px; color: #5F5F5F; margin-top: 8px; }
 .fact-meta b { color: #8A8A8A; font-weight: 600; }
 .rel { background: #111111; border: 1px solid #202020; border-radius: 3px;
-  padding: 12px 14px; margin-bottom: 10px; }
+  padding: 12px 16px; margin-bottom: 10px; }
 .rel-contra { border-left: 2px solid #FF4B3F; }
 .rel-corrob { border-left: 2px solid #3A3A3A; }
 .rel-ctx { border-left: 2px dashed #8A8A8A; }
-.badge { display: inline-block; font-size: 10.5px; font-weight: 700;
+.badge { display: inline-block; font-size: 11px; font-weight: 700;
   letter-spacing: 0.12em; padding: 2px 8px; border: 1px solid #2A2A2A;
-  border-radius: 2px; color: #E8E8E8; }
+  border-radius: 2px; }
 .badge-contra { color: #FF4B3F; border-color: #FF4B3F; }
 .badge-review { color: #D0D500; border-color: #D0D500; }
 .badge-dim { color: #8A8A8A; }
-.conf { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8A8A8A; }
-.expl { font-size: 13px; color: #B5B5B5; line-height: 1.55; margin-top: 8px; }
+.conf { font-size: 12.5px; color: #8A8A8A; }
+.expl { font-size: 13.5px; color: #B5B5B5; line-height: 1.55; margin-top: 8px; }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .pair-cell { background: #161616; border: 1px solid #202020; border-radius: 2px;
-  padding: 8px 10px; }
-.pair-val { font-size: 16px; font-weight: 700; color: #E8E8E8; }
-.pair-doc { font-size: 11.5px; color: #8A8A8A; margin-top: 2px; }
-.ev { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #8A8A8A;
-  background: #0B0B0B; border: 1px solid #202020; border-radius: 2px;
-  padding: 8px 10px; margin-top: 6px; white-space: pre-wrap; }
-.prov { font-size: 12px; color: #8A8A8A; margin-top: 6px; }
-.status-ok { color: #9AA29A; } .status-warn { color: #D0D500; }
-.status-err { color: #FF4B3F; } .status-mut { color: #5F5F5F; }
-div[data-testid="stExpander"] { background: #111111; border: 1px solid #202020;
-  border-radius: 3px; }
-div[data-testid="stExpander"] summary { color: #8A8A8A; font-size: 12px;
-  font-weight: 600; letter-spacing: 0.08em; }
-input, textarea { color: #E8E8E8 !important; }
-.hero { text-align: center; padding: 8vh 0 4vh; }
-.hero-title { font-size: 30px; font-weight: 700; letter-spacing: 0.3em;
+  padding: 10px 12px; }
+.pair-val { font-size: 17px; font-weight: 700; }
+.pair-doc { font-size: 12.5px; color: #8A8A8A; margin-top: 3px; }
+.ev { font-size: 12.5px; color: #B5B5B5; background: #0B0B0B;
+  border: 1px solid #202020; border-radius: 2px; padding: 8px 10px;
+  margin-top: 6px; white-space: pre-wrap; font-family: monospace; }
+.prov { font-size: 12.5px; color: #8A8A8A; margin-top: 8px;
+  letter-spacing: 0.06em; }
+div.stButton > button { background: #161616; color: #E8E8E8;
+  border: 1px solid #2A2A2A; border-radius: 3px; font-size: 13px;
+  font-weight: 600; letter-spacing: 0.08em; padding: 7px 16px; }
+div.stButton > button:hover { border-color: #D0D500; color: #D0D500; }
+div.stButton > button[kind="primary"] { background: #D0D500; color: #111111;
+  border: 1px solid #D0D500; }
+.upload-box { max-width: 600px; margin: 24px auto 0; background: #111111;
+  border: 1px solid #202020; border-radius: 4px; padding: 24px 26px; }
+.upload-title { font-size: 15px; font-weight: 600; letter-spacing: 0.14em; }
+.hero { text-align: center; padding: 6vh 0 0; }
+.hero-title { font-size: 32px; font-weight: 700; letter-spacing: 0.3em;
   text-indent: 0.3em; }
-.hero-sub { font-size: 13px; color: #8A8A8A; letter-spacing: 0.06em; margin-top: 6px; }
-.hero-box { max-width: 560px; margin: 26px auto 0; background: #111111;
-  border: 1px solid #202020; border-radius: 4px; padding: 22px 24px; text-align: left; }
-.hero-box-title { font-size: 12px; font-weight: 600; letter-spacing: 0.14em;
-  color: #E8E8E8; }
+.hero-sub { font-size: 13px; color: #8A8A8A; letter-spacing: 0.08em; margin-top: 6px; }
 </style>
 """
 
@@ -112,6 +120,10 @@ def _init_state() -> None:
             st.session_state[key] = value
 
 
+def _esc(value) -> str:
+    return html.escape("" if value is None else str(value))
+
+
 def _fmt_size(num_bytes) -> str:
     if num_bytes is None:
         return "—"
@@ -130,8 +142,7 @@ def _fmt_time(value) -> str:
     if not value:
         return "—"
     try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return dt.strftime("%b %d %H:%M")
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).strftime("%b %d")
     except Exception:
         return str(value)[:16]
 
@@ -160,7 +171,7 @@ def _page_label(evidence: dict) -> str:
         pdf_page = int(evidence.get("pdf_page_number", 0)) + 1
     except (TypeError, ValueError):
         return "page unknown"
-    label = f"PDF page {pdf_page}"
+    label = f"PDF p. {pdf_page}"
     if evidence.get("source_page_number"):
         label += f" (printed p. {evidence['source_page_number']})"
     return label
@@ -174,96 +185,32 @@ def _fact_page_label(fact: dict, evidence_by_id: dict) -> str:
     return "page unknown"
 
 
-def _status_class(status: str) -> str:
-    if status == "COMPLETED":
-        return "status-ok"
-    if status == "PARTIAL":
-        return "status-warn"
-    if status == "FAILED":
-        return "status-err"
-    return "status-mut"
+def _status_span(status: str) -> str:
+    cls = {"COMPLETED": "st-ok", "PARTIAL": "st-warn", "FAILED": "st-err"}.get(status, "")
+    return f'<span class="{cls}">{_esc(status)}</span>' if cls else _esc(status)
 
 
-def _load_documents() -> tuple[list[dict], str | None, bool]:
-    """Return (documents, error, list_supported). Falls back to the session
-    registry of uploaded IDs when the backend predates GET /documents."""
+def _load_documents() -> tuple[list[dict], str | None]:
+    """GET /documents. Falls back to per-id bundle fetches for the session
+    registry when the backend predates the list endpoint."""
     docs, err = api_client.list_documents()
     if docs is not None:
         for doc in docs:
             doc_id = str(doc.get("id"))
             if doc_id and doc_id not in st.session_state.doc_ids:
                 st.session_state.doc_ids.append(doc_id)
-        return docs, None, True
+        return docs, None
     if err == "NOT_SUPPORTED":
         fallback: list[dict] = []
         for doc_id in list(st.session_state.doc_ids):
             bundle, _ = api_client.get_bundle(doc_id)
             if bundle is not None:
                 fallback.append(bundle["document"])
-        return fallback, None, False
-    return [], err, True
+        return fallback, None
+    return [], err
 
 
-def _aggregate_facts(documents: list[dict], limit_per_doc: int = 50) -> tuple[list[dict], dict, str | None]:
-    """Aggregate persisted facts across documents. Returns (facts, doc_names, error)."""
-    facts: list[dict] = []
-    doc_names = {str(d.get("id")): d.get("filename", "—") for d in documents}
-    first_err = None
-    for doc in documents:
-        doc_id = str(doc.get("id"))
-        items, err = api_client.list_facts(doc_id)
-        if err is not None:
-            first_err = first_err or err
-            continue
-        facts.extend(items[:limit_per_doc])
-    facts.sort(key=lambda f: str(f.get("id")))
-    return facts, doc_names, first_err
-
-
-def _aggregate_relationships(
-    documents: list[dict], rel_type: str | None, min_conf: float
-) -> tuple[list[dict], dict, str | None]:
-    rels: dict[str, dict] = {}
-    doc_names = {str(d.get("id")): d.get("filename", "—") for d in documents}
-    first_err = None
-    for doc in documents:
-        items, err = api_client.list_relationships(str(doc.get("id")), rel_type, min_conf)
-        if err is not None:
-            first_err = first_err or err
-            continue
-        for rel in items:
-            rels[str(rel.get("id"))] = rel
-    ordered = sorted(rels.values(), key=lambda r: (-float(r.get("confidence", 0) or 0), str(r.get("id"))))
-    return ordered, doc_names, first_err
-
-
-# ---------------------------------------------------------------- render
-
-
-def _render_header(has_docs: bool) -> None:
-    left, right = st.columns([3, 2])
-    with left:
-        st.markdown('<div class="brand">ALETHEIA</div>', unsafe_allow_html=True)
-        st.markdown('<div class="brand-sub">Fact Knowledge Layer</div>', unsafe_allow_html=True)
-    with right:
-        cols = st.columns([1, 1, 1])
-        with cols[1]:
-            if st.button("UPLOAD PDFS", use_container_width=True):
-                st.session_state.show_uploader = not st.session_state.show_uploader
-                st.rerun()
-        with cols[2]:
-            if st.button("REFRESH", use_container_width=True):
-                for key in ("selected_doc_id", "selected_fact_id", "selected_rel_id",
-                            "query", "rel_type_filter", "show_uploader"):
-                    defaults = {"selected_doc_id": None, "selected_fact_id": None,
-                                "selected_rel_id": None, "query": "",
-                                "rel_type_filter": "All", "show_uploader": False}
-                    st.session_state[key] = defaults[key]
-                st.session_state.rel_min_conf = 0.0
-                st.cache_data.clear()
-                st.rerun()
-    if has_docs and st.session_state.show_uploader:
-        _render_compact_uploader()
+# ---------------------------------------------------------------- upload
 
 
 def _handle_uploads(files) -> None:
@@ -280,8 +227,7 @@ def _handle_uploads(files) -> None:
             if doc_id not in st.session_state.doc_ids:
                 st.session_state.doc_ids.append(doc_id)
             st.session_state.doc_sizes[doc_id] = len(data)
-        status = doc.get("ingestion_status", "—")
-        st.success(f"{uploaded.name}: {status} "
+        st.success(f"{uploaded.name}: {doc.get('ingestion_status', '—')} "
                    f"({(result or {}).get('page_count', '?')} pages, "
                    f"{(result or {}).get('evidence_count', '?')} evidence units)")
     st.session_state.uploader_nonce += 1
@@ -289,85 +235,104 @@ def _handle_uploads(files) -> None:
     st.rerun()
 
 
-def _render_compact_uploader() -> None:
-    with st.expander("Upload PDFs", expanded=True):
-        files = st.file_uploader(
-            "Select one or more PDF files",
-            type=["pdf"],
-            accept_multiple_files=True,
-            key=f"uploader_{st.session_state.uploader_nonce}",
-            label_visibility="collapsed",
-        )
-        if files:
-            if st.button("INGEST", type="primary"):
-                _handle_uploads(files)
+def _render_uploader(nonce_key: str, cta: str = "INGEST") -> None:
+    files = st.file_uploader(
+        "Select one or more PDF files",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=nonce_key,
+    )
+    if files and st.button(cta, type="primary"):
+        _handle_uploads(files)
+
+
+# ---------------------------------------------------------------- chrome
+
+
+def _render_navbar() -> None:
+    st.markdown(
+        '<div class="navbar"><div><div class="brand">ALETHEIA</div>'
+        '<div class="brand-sub">FACT KNOWLEDGE LAYER</div></div></div>',
+        unsafe_allow_html=True,
+    )
+    left, spacer, up_col, ref_col = st.columns([6, 2, 1.4, 1.2])
+    with up_col:
+        if st.button("Upload PDFs", use_container_width=True):
+            st.session_state.show_uploader = not st.session_state.show_uploader
+            st.rerun()
+    with ref_col:
+        if st.button("Refresh", use_container_width=True):
+            st.session_state.selected_doc_id = None
+            st.session_state.selected_fact_id = None
+            st.session_state.selected_rel_id = None
+            st.session_state.query = ""
+            st.session_state.rel_type_filter = "All"
+            st.session_state.rel_min_conf = 0.0
+            st.session_state.show_uploader = False
+            st.cache_data.clear()
+            st.rerun()
+    if st.session_state.show_uploader:
+        with st.expander("Upload PDFs", expanded=True):
+            _render_uploader(f"uploader_{st.session_state.uploader_nonce}")
 
 
 def _render_empty_state() -> None:
     st.markdown(
         '<div class="hero"><div class="hero-title">ALETHEIA</div>'
-        '<div class="hero-sub">Fact Knowledge Layer</div></div>',
+        '<div class="hero-sub">FACT KNOWLEDGE LAYER</div></div>',
         unsafe_allow_html=True,
     )
     st.markdown(
-        '<div class="hero-box"><div class="hero-box-title">UPLOAD PDF FILES</div>'
+        '<div class="upload-box"><div class="upload-title">UPLOAD PDF FILES</div>'
         '<div class="fact-meta">One or more PDFs. Each file is ingested into '
         "grounded evidence before any facts are extracted.</div></div>",
         unsafe_allow_html=True,
     )
-    files = st.file_uploader(
-        "Upload PDF files",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key=f"hero_uploader_{st.session_state.uploader_nonce}",
-        label_visibility="collapsed",
-    )
-    if files and st.button("INGEST", type="primary"):
-        _handle_uploads(files)
+    _render_uploader(f"hero_uploader_{st.session_state.uploader_nonce}")
     health, err = api_client.health()
     if err is not None:
         st.error(err)
     elif health is not None and not (health.get("database", {}) or {}).get("reachable", True):
-        st.warning(f"Backend is up but the database is unreachable: "
-                   f"{(health.get('database', {}) or {}).get('detail', 'unknown')}")
+        detail = (health.get("database", {}) or {}).get("detail", "unknown")
+        st.warning(f"Backend is up but the database is unreachable: {detail}")
 
 
 def _render_documents_section(documents: list[dict]) -> list[dict]:
-    st.markdown('<div class="section-label">DOCUMENTS</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section">DOCUMENTS</div>', unsafe_allow_html=True)
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
     if not documents:
         st.info("No documents ingested yet.")
         return documents
-    rows = []
+    cells = []
     for doc in documents:
         doc_id = str(doc.get("id"))
-        rows.append({
-            "Filename": doc.get("filename", "—"),
-            "Size": _fmt_size(st.session_state.doc_sizes.get(doc_id)),
-            "Pages": doc.get("page_count", "—"),
-            "Uploaded": _fmt_time(doc.get("created_at")),
-            "Status": doc.get("ingestion_status", "—"),
-            "_id": doc_id,
-        })
-    st.dataframe(
-        [{k: r[k] for k in ("Filename", "Size", "Pages", "Uploaded", "Status")} for r in rows],
-        use_container_width=True,
-        hide_index=True,
+        cells.append(
+            f"<tr><td><span class='doc-name'>{_esc(doc.get('filename', '—'))}</span></td>"
+            f"<td>{_esc(_fmt_size(st.session_state.doc_sizes.get(doc_id)))}</td>"
+            f"<td>{_esc(doc.get('page_count', '—'))}</td>"
+            f"<td>{_esc(_fmt_time(doc.get('created_at')))}</td>"
+            f"<td>{_status_span(doc.get('ingestion_status', '—'))}</td></tr>"
+        )
+    st.markdown(
+        "<table class='tbl'><thead><tr><th>FILENAME</th><th>SIZE</th><th>PAGES</th>"
+        "<th>UPLOADED</th><th>STATUS</th></tr></thead><tbody>"
+        + "".join(cells) + "</tbody></table>",
+        unsafe_allow_html=True,
     )
-    options = ["All documents"] + [r["Filename"] for r in rows]
+    options = ["All documents"] + [str(d.get("filename", "—")) for d in documents]
     current = st.session_state.selected_doc_id
+    ids = [str(d.get("id")) for d in documents]
     try:
-        default_idx = 0 if current is None else [r["_id"] for r in rows].index(current) + 1
+        default_idx = 0 if current is None else ids.index(current) + 1
     except ValueError:
         default_idx = 0
-    choice = st.selectbox("Filter to document", options, index=default_idx,
-                          label_visibility="collapsed")
+    choice = st.selectbox("Filter to document", options, index=default_idx)
     if choice == "All documents":
         st.session_state.selected_doc_id = None
         return documents
-    picked = next(r for r in rows if r["Filename"] == choice)
-    st.session_state.selected_doc_id = picked["_id"]
-    return [d for d in documents if str(d.get("id")) == picked["_id"]]
+    picked = next(d for d in documents if str(d.get("filename", "—")) == choice)
+    st.session_state.selected_doc_id = str(picked.get("id"))
+    return [picked]
 
 
 def _render_tabs() -> None:
@@ -386,84 +351,89 @@ def _render_tabs() -> None:
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
 
+# ---------------------------------------------------------------- knowledge
+
+
 def _render_fact_block(fact: dict, doc_name: str, evidence_by_id: dict, key: str) -> None:
     norm = _norm_text(fact)
-    norm_html = f'<div class="fact-norm">Normalized: <b>{norm}</b></div>' if norm else ""
+    norm_html = (f'<div class="fact-norm-label">NORMALIZED</div>'
+                 f'<div class="fact-norm"><b>{_esc(norm)}</b></div>') if norm else ""
     scope = fact.get("scope_text") or ""
-    scope_html = f" · {scope}" if scope else ""
+    scope_html = f" · {_esc(scope)}" if scope else ""
     geo = fact.get("geography") or ""
-    geo_html = f" · {geo}" if geo else ""
+    geo_html = f" · {_esc(geo)}" if geo else ""
     selected = st.session_state.selected_fact_id == str(fact.get("id"))
     border = f' style="border-left-color: {ACCENT};"' if selected else ""
     st.markdown(
         f'<div class="fact"{border}>'
-        f'<div class="fact-subj">{fact.get("subject", "—")}</div>'
-        f'<div class="fact-pred">{fact.get("predicate", "—")}</div>'
-        f'<div class="fact-value">{fact.get("value_text", "—")}</div>'
+        f'<div class="fact-subj">{_esc(fact.get("subject", "—"))}</div>'
+        f'<div class="fact-pred">{_esc(fact.get("predicate", "—"))}</div>'
+        f'<div class="fact-value">{_esc(fact.get("value_text", "—"))}</div>'
         f"{norm_html}"
-        f'<div class="fact-meta"><b>{fact.get("time_text") or "time unknown"}</b>'
-        f"{scope_html}{geo_html} · Confidence: <b>{_fmt_conf(fact.get('extraction_confidence'))}</b>"
-        f" · {doc_name} · {_fact_page_label(fact, evidence_by_id)}</div>"
+        f'<div class="fact-meta"><b>{_esc(fact.get("time_text") or "time unknown")}</b>'
+        f" · {_fmt_conf(fact.get('extraction_confidence'))} confidence"
+        f"{scope_html}{geo_html}<br>{_esc(doc_name)} · "
+        f"{_esc(_fact_page_label(fact, evidence_by_id))}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
-    cols = st.columns([1, 4])
-    with cols[0]:
-        if st.button("EVIDENCE", key=f"ev_{key}_{fact.get('id')}", use_container_width=True):
-            st.session_state.selected_fact_id = str(fact.get("id"))
-            st.rerun()
+    if st.button("Evidence / provenance", key=f"ev_{key}_{fact.get('id')}"):
+        st.session_state.selected_fact_id = str(fact.get("id"))
+        st.rerun()
     if selected:
         _render_fact_evidence(fact, doc_name, evidence_by_id)
 
 
 def _render_fact_evidence(fact: dict, doc_name: str, evidence_by_id: dict) -> None:
     with st.expander("FACT DETAIL / PROVENANCE", expanded=True):
-        st.markdown(
-            f'<div class="prov">FACT → SOURCE EVIDENCE → SOURCE DOCUMENT → PDF PAGE</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="prov">FACT → EVIDENCE → DOCUMENT → PDF PAGE</div>',
+                    unsafe_allow_html=True)
         detail = {
             "fact_id": str(fact.get("id")),
-            "document": doc_name,
-            "status": fact.get("status"),
-            "value_kind": fact.get("value_kind"),
+            "subject": fact.get("subject"),
+            "predicate": fact.get("predicate"),
+            "original_value": fact.get("value_text"),
+            "normalized": _norm_text(fact),
             "unit": fact.get("unit"),
-            "estimate_status": fact.get("estimate_status"),
+            "time": fact.get("time_text"),
+            "scope": fact.get("scope_text"),
+            "geography": fact.get("geography"),
+            "confidence": fact.get("extraction_confidence"),
+            "status": fact.get("status"),
             "ambiguity_flags": fact.get("ambiguity_flags") or [],
-            "extraction_confidence": fact.get("extraction_confidence"),
+            "document": doc_name,
         }
         st.json(detail)
         eids = fact.get("evidence_ids", []) or []
         if not eids:
             st.warning("No evidence IDs linked to this fact.")
             return
-        bundle, err = api_client.get_bundle(str(fact.get("document_id")))
-        full_evidence = {}
+        bundle, _ = api_client.get_bundle(str(fact.get("document_id")))
+        full = dict(evidence_by_id)
         if bundle is not None:
-            full_evidence = {str(e.get("id")): e for e in bundle.get("evidence", [])}
-        full_evidence.update(evidence_by_id)
+            for ev in bundle.get("evidence", []) or []:
+                full[str(ev.get("id"))] = ev
         for eid in eids:
-            ev = full_evidence.get(str(eid))
+            ev = full.get(str(eid))
             if ev is None:
-                st.markdown(f'<div class="ev">evidence {eid}: unavailable</div>',
+                st.markdown(f"<div class='ev'>evidence {_esc(eid)}: unavailable</div>",
                             unsafe_allow_html=True)
                 continue
             bbox = ev.get("bbox")
             st.markdown(
-                f'<div class="ev">{_page_label(ev)} · {ev.get("type", "?")} · '
-                f'{ev.get("extraction_method", "?")} · '
-                f'quality {ev.get("extraction_quality", "—")} · '
-                f'bbox {bbox if bbox else "—"}\n{(ev.get("text") or "")[:2000]}'
-                f"\n-- evidence_id {ev.get('id')}</div>",
+                f"<div class='ev'>{_esc(_page_label(ev))} · {_esc(ev.get('type', '?'))} · "
+                f"{_esc(ev.get('extraction_method', '?'))} · "
+                f"quality {ev.get('extraction_quality', '—')} · "
+                f"bbox {_esc(bbox if bbox else '—')}\n{_esc((ev.get('text') or '')[:2000])}"
+                f"\n-- evidence_id {_esc(ev.get('id'))}</div>",
                 unsafe_allow_html=True,
             )
 
 
 def _render_knowledge(documents: list[dict]) -> None:
     query = st.text_input(
-        "Search facts, entities, metrics...",
+        "Search facts, entities, metrics",
         value=st.session_state.query,
-        label_visibility="collapsed",
         placeholder="Search facts, entities, metrics...",
     )
     st.session_state.query = query
@@ -479,34 +449,41 @@ def _render_knowledge(documents: list[dict]) -> None:
         if not hits:
             st.info("No facts match this query.")
             return
-        st.markdown(f'<div class="fact-meta">{len(hits)} result(s)</div>',
+        st.markdown(f"<div class='fact-meta'>{len(hits)} result(s)</div>",
                     unsafe_allow_html=True)
         for hit in hits:
             fact = hit.get("fact", {})
             doc = hit.get("document") or {}
             ev_by_id = {str(e.get("id")): e for e in hit.get("evidence", []) or []}
             st.markdown(
-                f'<div class="fact-meta">score {hit.get("score", 0):.2f} · '
-                f'{hit.get("match_kind", "?")}</div>',
+                f"<div class='fact-meta'>score {hit.get('score', 0):.2f} · "
+                f"{_esc(hit.get('match_kind', '?'))}</div>",
                 unsafe_allow_html=True,
             )
-            _render_fact_block(fact, doc.get("filename", "—"), ev_by_id,
-                               key=f"search_{hit.get('score', 0):.3f}")
+            _render_fact_block(fact, str(doc.get("filename", "—")), ev_by_id,
+                               key=f"s{hit.get('score', 0):.3f}")
         return
 
     with st.spinner("Loading facts ..."):
-        facts, doc_names, err = _aggregate_facts(documents)
+        facts: list[dict] = []
+        doc_names = {str(d.get("id")): str(d.get("filename", "—")) for d in documents}
+        first_err = None
+        for doc in documents:
+            items, err = api_client.list_facts(str(doc.get("id")))
+            if err is not None:
+                first_err = first_err or err
+                continue
+            facts.extend((items or [])[:50])
+        facts.sort(key=lambda f: str(f.get("id")))
     if doc_filter:
         facts = [f for f in facts if str(f.get("document_id")) == doc_filter]
-    if err is not None and not facts:
-        st.error(f"Could not load facts: {err}")
+    if first_err is not None and not facts:
+        st.error(f"Could not load facts: {first_err}")
         return
     if not facts:
         st.info("No persisted facts yet for these documents. "
                 "Fact extraction runs explicitly per document via the API.")
         return
-    # Evidence lookup for page labels: resolve from search-free path via
-    # one bundle fetch per document (bounded, demo scale).
     ev_by_id: dict = {}
     for doc in documents:
         if doc_filter and str(doc.get("id")) != doc_filter:
@@ -515,82 +492,99 @@ def _render_knowledge(documents: list[dict]) -> None:
         if bundle is not None:
             for ev in bundle.get("evidence", []) or []:
                 ev_by_id[str(ev.get("id"))] = ev
-    st.markdown(f'<div class="fact-meta">{len(facts)} fact(s)</div>', unsafe_allow_html=True)
+    st.markdown(f"<div class='fact-meta'>{len(facts)} fact(s)</div>",
+                unsafe_allow_html=True)
     for fact in facts[:100]:
         _render_fact_block(fact, doc_names.get(str(fact.get("document_id")), "—"),
                            ev_by_id, key="all")
 
 
+# ---------------------------------------------------------------- relationships
+
+
 def _rel_badge(rel: dict) -> str:
-    rtype = rel.get("relationship_type", "?")
-    cls = "badge-contra" if rtype == "CONTRADICTS" else ("badge-dim")
+    rtype = str(rel.get("relationship_type", "?"))
+    cls = "badge-contra" if rtype == "CONTRADICTS" else "badge-dim"
     review = ""
     if rel.get("status") == "NEEDS_REVIEW":
         review = ' <span class="badge badge-review">NEEDS REVIEW</span>'
-    return (f'<span class="badge {cls}">{rtype}</span>{review} '
+    return (f'<span class="badge {cls}">{_esc(rtype)}</span>{review} '
             f'<span class="conf">{_fmt_conf(rel.get("confidence"))}</span>')
 
 
 def _fact_summary(fact: dict, doc_names: dict) -> str:
-    return (f'<div class="fact-subj">{fact.get("subject", "—")}</div>'
-            f'<div class="pair-val">{fact.get("value_text", "—")}</div>'
-            f'<div class="pair-doc">{fact.get("predicate", "—")} · '
-            f'{doc_names.get(str(fact.get("document_id")), "—")}</div>')
+    return (f"<div class='fact-subj'>{_esc(fact.get('subject', '—'))}</div>"
+            f"<div class='pair-val'>{_esc(fact.get('value_text', '—'))}</div>"
+            f"<div class='pair-doc'>{_esc(fact.get('predicate', '—'))} · "
+            f"{_esc(doc_names.get(str(fact.get('document_id')), '—'))}</div>")
 
 
 def _render_relationships(documents: list[dict]) -> None:
     cols = st.columns([2, 1])
     with cols[0]:
         options = ["All"] + REL_TYPES
-        selfilter = st.selectbox("Relationship type", options,
-                                 index=options.index(st.session_state.rel_type_filter)
-                                 if st.session_state.rel_type_filter in options else 0)
-        st.session_state.rel_type_filter = selfilter
+        current = st.session_state.rel_type_filter
+        sel = st.selectbox("Relationship type", options,
+                           index=options.index(current) if current in options else 0)
+        st.session_state.rel_type_filter = sel
     with cols[1]:
         min_conf = st.slider("Min confidence", 0.0, 1.0,
                              float(st.session_state.rel_min_conf), 0.05)
         st.session_state.rel_min_conf = min_conf
-    rel_type = None if selfilter == "All" else selfilter
+    rel_type = None if sel == "All" else sel
     doc_filter = st.session_state.selected_doc_id
     visible = [d for d in documents
                if doc_filter is None or str(d.get("id")) == doc_filter]
     with st.spinner("Loading relationships ..."):
-        rels, doc_names, err = _aggregate_relationships(visible, rel_type, min_conf)
-    if err is not None and not rels:
-        st.error(f"Could not load relationships: {err}")
+        rels: dict[str, dict] = {}
+        doc_names = {str(d.get("id")): str(d.get("filename", "—")) for d in documents}
+        first_err = None
+        for doc in visible:
+            items, err = api_client.list_relationships(
+                str(doc.get("id")), rel_type, min_conf)
+            if err is not None:
+                first_err = first_err or err
+                continue
+            for rel in items or []:
+                rels[str(rel.get("id"))] = rel
+        ordered = sorted(rels.values(),
+                         key=lambda r: (-float(r.get("confidence", 0) or 0),
+                                        str(r.get("id"))))
+    if first_err is not None and not ordered:
+        st.error(f"Could not load relationships: {first_err}")
         return
-    if not rels:
+    if not ordered:
         st.info("No persisted relationships for this filter. "
                 "Relationship reasoning runs explicitly per document via the API.")
         return
-    st.markdown(f'<div class="fact-meta">{len(rels)} relationship(s)</div>',
+    st.markdown(f"<div class='fact-meta'>{len(ordered)} relationship(s)</div>",
                 unsafe_allow_html=True)
-    for rel in rels[:100]:
-        rtype = rel.get("relationship_type", "")
-        css_class = "rel rel-contra" if rtype == "CONTRADICTS" else (
-            "rel rel-ctx" if rtype == "CONTEXTUAL_DIFFERENCE" else "rel rel-corrob")
-        st.markdown(f'<div class="{css_class}">{_rel_badge(rel)}', unsafe_allow_html=True)
+    for rel in ordered[:100]:
+        rtype = str(rel.get("relationship_type", ""))
+        css_class = ("rel rel-contra" if rtype == "CONTRADICTS"
+                     else "rel rel-ctx" if rtype == "CONTEXTUAL_DIFFERENCE"
+                     else "rel rel-corrob")
         detail, derr = api_client.get_relationship_detail(str(rel.get("id")))
         if derr is not None or detail is None:
             st.warning(f"Could not expand relationship {rel.get('id')}: {derr}")
-            st.markdown("</div>", unsafe_allow_html=True)
             continue
         fact_a, fact_b = detail.get("fact_a", {}), detail.get("fact_b", {})
+        st.markdown(f"<div class='{css_class}'>{_rel_badge(rel)}", unsafe_allow_html=True)
         st.markdown(
-            f'<div class="pair"><div class="pair-cell">{_fact_summary(fact_a, doc_names)}</div>'
-            f'<div class="pair-cell">{_fact_summary(fact_b, doc_names)}</div></div>',
+            f"<div class='pair'><div class='pair-cell'>"
+            f"{_fact_summary(fact_a, doc_names)}</div>"
+            f"<div class='pair-cell'>{_fact_summary(fact_b, doc_names)}</div></div>",
             unsafe_allow_html=True,
         )
         if rtype == "CONTRADICTS":
             st.markdown(
-                '<div class="expl">Same entity, same metric, materially disagreeing '
-                "values. Neither source is judged correct.</div>",
+                "<div class='expl'>Material disagreement. "
+                "Neither source is judged correct.</div>",
                 unsafe_allow_html=True,
             )
-        st.markdown(f'<div class="expl">{rel.get("explanation", "")}</div>',
+        st.markdown(f"<div class='expl'>{_esc(rel.get('explanation', ''))}</div>",
                     unsafe_allow_html=True)
-        if st.button("VIEW EVIDENCE", key=f"rel_{rel.get('id')}",
-                     use_container_width=False):
+        if st.button("VIEW EVIDENCE", key=f"rel_{rel.get('id')}"):
             st.session_state.selected_rel_id = str(rel.get("id"))
             st.rerun()
         if st.session_state.selected_rel_id == str(rel.get("id")):
@@ -599,22 +593,27 @@ def _render_relationships(documents: list[dict]) -> None:
                                         ("B", fact_b, detail.get("evidence_b", []) or [])):
                     ev_map = {str(e.get("id")): e for e in evs}
                     page = _fact_page_label(fact, ev_map) if evs else "page unknown"
-                    subj = fact.get("subject", "—")
-                    val = fact.get("value_text", "—")
                     st.markdown(
-                        f"<div class='prov'>Side {side}: {subj} — {val} ({page})</div>",
+                        f"<div class='prov'>Side {_esc(side)}: "
+                        f"{_esc(fact.get('subject', '—'))} — "
+                        f"{_esc(fact.get('value_text', '—'))} ({_esc(page)})</div>",
                         unsafe_allow_html=True)
                     if not evs:
-                        st.markdown('<div class="ev">no evidence returned</div>',
+                        st.markdown("<div class='ev'>no evidence returned</div>",
                                     unsafe_allow_html=True)
                     for ev in evs:
                         st.markdown(
-                            f'<div class="ev">{_page_label(ev)} · {ev.get("type", "?")} · '
-                            f'{ev.get("extraction_method", "?")}\n{(ev.get("text") or "")[:2000]}'
-                            f"\n-- evidence_id {ev.get('id')}</div>",
+                            f"<div class='ev'>{_esc(_page_label(ev))} · "
+                            f"{_esc(ev.get('type', '?'))} · "
+                            f"{_esc(ev.get('extraction_method', '?'))}\n"
+                            f"{_esc((ev.get('text') or '')[:2000])}"
+                            f"\n-- evidence_id {_esc(ev.get('id'))}</div>",
                             unsafe_allow_html=True,
                         )
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------- documents tab
 
 
 def _render_document_detail(documents: list[dict]) -> None:
@@ -636,23 +635,29 @@ def _render_document_detail(documents: list[dict]) -> None:
     evidence = bundle.get("evidence", []) or []
     facts, ferr = api_client.list_facts(doc_id)
     rels, rerr = api_client.list_relationships(doc_id)
-    st.markdown(f'<div class="fact-pred">{document.get("filename", "—")}</div>',
+    st.markdown(f"<div class='fact-pred'>{_esc(document.get('filename', '—'))}</div>",
                 unsafe_allow_html=True)
-    meta_cols = st.columns(4)
-    meta_cols[0].markdown(f'<div class="fact-meta">Size<br><b>{_fmt_size(st.session_state.doc_sizes.get(doc_id))}</b></div>',
-                         unsafe_allow_html=True)
-    meta_cols[1].markdown(f'<div class="fact-meta">Pages<br><b>{document.get("page_count", len(pages))}</b></div>',
-                         unsafe_allow_html=True)
-    meta_cols[2].markdown(f'<div class="fact-meta">Status<br><b>{document.get("ingestion_status", "—")}</b></div>',
-                         unsafe_allow_html=True)
-    meta_cols[3].markdown(f'<div class="fact-meta">Uploaded<br><b>{_fmt_time(document.get("created_at"))}</b></div>',
-                         unsafe_allow_html=True)
+    meta = st.columns(4)
+    meta[0].markdown(f"<div class='fact-meta'>Size<br><b>"
+                     f"{_esc(_fmt_size(st.session_state.doc_sizes.get(doc_id)))}</b></div>",
+                     unsafe_allow_html=True)
+    meta[1].markdown(f"<div class='fact-meta'>Pages<br><b>"
+                     f"{_esc(document.get('page_count', len(pages)))}</b></div>",
+                     unsafe_allow_html=True)
+    meta[2].markdown(f"<div class='fact-meta'>Status<br><b>"
+                     f"{_esc(document.get('ingestion_status', '—'))}</b></div>",
+                     unsafe_allow_html=True)
+    meta[3].markdown(f"<div class='fact-meta'>Uploaded<br><b>"
+                     f"{_esc(_fmt_time(document.get('created_at')))}</b></div>",
+                     unsafe_allow_html=True)
     counts = st.columns(3)
-    counts[0].markdown(f'<div class="fact-meta">Evidence units<br><b>{len(evidence)}</b></div>',
+    counts[0].markdown(f"<div class='fact-meta'>Evidence units<br><b>{len(evidence)}</b></div>",
                        unsafe_allow_html=True)
-    counts[1].markdown(f'<div class="fact-meta">Facts<br><b>{len(facts) if facts is not None else f"unavailable ({ferr})"}</b></div>',
+    fact_count = len(facts) if facts is not None else f"unavailable ({_esc(ferr)})"
+    rel_count = len(rels) if rels is not None else f"unavailable ({_esc(rerr)})"
+    counts[1].markdown(f"<div class='fact-meta'>Facts<br><b>{fact_count}</b></div>",
                        unsafe_allow_html=True)
-    counts[2].markdown(f'<div class="fact-meta">Relationships<br><b>{len(rels) if rels is not None else f"unavailable ({rerr})"}</b></div>',
+    counts[2].markdown(f"<div class='fact-meta'>Relationships<br><b>{rel_count}</b></div>",
                        unsafe_allow_html=True)
     if document.get("error"):
         st.error(f"Processing error: {document['error']}")
@@ -660,23 +665,35 @@ def _render_document_detail(documents: list[dict]) -> None:
     if bad:
         st.warning(f"{len(bad)} page(s) with extraction errors.")
     if pages:
-        st.markdown('<div class="section-label">PAGES</div>', unsafe_allow_html=True)
-        st.dataframe(
-            [{"PDF page": int(p.get("pdf_page_number", 0)) + 1,
-              "Printed": p.get("source_page_number") or "—",
-              "Verdict": p.get("quality_verdict", "—"),
-              "Quality": round(float(p.get("extraction_quality", 0) or 0), 2),
-              "Chars": p.get("char_count", 0)} for p in pages],
-            use_container_width=True,
-            hide_index=True,
+        st.markdown('<div class="section">PAGES</div>', unsafe_allow_html=True)
+        rows = []
+        for p in pages:
+            try:
+                pdf_page = int(p.get("pdf_page_number", 0)) + 1
+            except (TypeError, ValueError):
+                pdf_page = "—"
+            try:
+                quality = round(float(p.get("extraction_quality", 0) or 0), 2)
+            except (TypeError, ValueError):
+                quality = "—"
+            rows.append(
+                f"<tr><td>{pdf_page}</td><td>{_esc(p.get('source_page_number') or '—')}</td>"
+                f"<td>{_esc(p.get('quality_verdict', '—'))}</td><td>{quality}</td>"
+                f"<td>{_esc(p.get('char_count', 0))}</td></tr>"
+            )
+        st.markdown(
+            "<table class='tbl'><thead><tr><th>PDF PAGE</th><th>PRINTED</th>"
+            "<th>VERDICT</th><th>QUALITY</th><th>CHARACTERS</th></tr></thead><tbody>"
+            + "".join(rows) + "</tbody></table>",
+            unsafe_allow_html=True,
         )
     if evidence:
-        st.markdown('<div class="section-label">EVIDENCE SAMPLE (first 10)</div>',
-                    unsafe_allow_html=True)
+        st.markdown('<div class="section">EVIDENCE (first 10)</div>', unsafe_allow_html=True)
         for ev in evidence[:10]:
             st.markdown(
-                f'<div class="ev">{_page_label(ev)} · {ev.get("type", "?")} · '
-                f'{ev.get("extraction_method", "?")}\n{(ev.get("text") or "")[:1200]}</div>',
+                f"<div class='ev'>{_esc(_page_label(ev))} · {_esc(ev.get('type', '?'))} · "
+                f"{_esc(ev.get('extraction_method', '?'))}\n"
+                f"{_esc((ev.get('text') or '')[:1200])}</div>",
                 unsafe_allow_html=True,
             )
 
@@ -689,12 +706,12 @@ def main() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
     _init_state()
 
-    documents, err, _supported = _load_documents()
+    documents, err = _load_documents()
     if err is not None:
         st.markdown('<div class="brand">ALETHEIA</div>', unsafe_allow_html=True)
         st.error(err)
         st.info("Start the backend (docker compose up --build), then press Refresh.")
-        if st.button("REFRESH"):
+        if st.button("Refresh"):
             st.rerun()
         return
 
@@ -702,7 +719,7 @@ def main() -> None:
         _render_empty_state()
         return
 
-    _render_header(has_docs=True)
+    _render_navbar()
     visible_docs = _render_documents_section(documents)
     _render_tabs()
     if st.session_state.active_tab == "KNOWLEDGE":
