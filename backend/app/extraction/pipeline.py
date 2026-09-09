@@ -14,8 +14,10 @@ from hashlib import sha256
 from uuid import uuid4
 
 from app.core.config import settings
+from app.extraction.ml_service_ocr import MLServiceOCRProvider
 from app.extraction.ocr_provider import OcrError, OcrProvider
 from app.extraction.paddle_ocr import PaddleOCRProvider, paddle_ocr_available
+from app.ml.client import MLServiceClient, MLServiceError
 from app.extraction.pymupdf import extract_pdf
 from app.extraction.quality import assess_quality, needs_ocr
 from app.extraction.tables import StructuredTable, extract_tables
@@ -43,12 +45,6 @@ _OCR_ERROR_CATEGORIES = {
 
 
 def get_ocr_provider() -> OcrProvider | None:
-    """Resolve the configured OCR provider, or None when unavailable.
-
-    Never raises for missing engines/models: unavailability is a normal
-    outcome (tests, model-less environments) and ingestion continues
-    with native evidence alone.
-    """
     if not settings.ocr_enabled:
         return None
     if settings.ocr_provider != "paddleocr":
@@ -56,6 +52,21 @@ def get_ocr_provider() -> OcrProvider | None:
             "unknown OCR provider %r: OCR disabled", settings.ocr_provider
         )
         return None
+    try:
+        status = MLServiceClient(base_url=settings.ml_service_url).health(
+            timeout_s=2.0
+        )
+        ocr = status.get("ocr") if isinstance(status, dict) else None
+        if isinstance(ocr, dict) and ocr.get("available"):
+            return MLServiceOCRProvider(
+                lang=settings.ocr_language,
+                dpi=settings.ocr_dpi,
+            )
+        logger.info("ML OCR unavailable: %s", ocr)
+    except MLServiceError as exc:
+        logger.info("ML service unreachable, trying local PaddleOCR: %s", exc)
+    except Exception as exc:  # never fail ingestion on a probe error
+        logger.info("ML OCR probe failed, trying local PaddleOCR: %s", exc)
     available, reason = paddle_ocr_available(
         lang=settings.ocr_language,
         allow_model_download=settings.ocr_allow_model_download,

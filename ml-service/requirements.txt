@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.0+cpu
+fastapi>=0.115,<0.120
+uvicorn>=0.34,<0.36
+pydantic>=2.10,<3
+pymupdf>=1.24,<2
+numpy>=1.26,<3
+paddleocr>=3,<4
+paddlepaddle>=3.0,<4
+sentence-transformers>=3,<4

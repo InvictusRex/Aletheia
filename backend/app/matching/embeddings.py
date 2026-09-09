@@ -11,42 +11,18 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
 from uuid import UUID
 
-import numpy as np
+import numpy as np  # via pgvector (hard backend dependency)
 
+from app.core.config import settings
+from app.ml.client import MLServiceClient, MLServiceError
 from app.models.fact import Fact
-from app.models.relationship import CandidatePair  # noqa: F401 -- imported so callers reuse the shared contract instead of redefining it; scores below feed CandidatePair.score (ordering only).
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 
-_ST_MODELS: dict[str, Any] = {}
-
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-
-def _get_st_model(model_name: str = EMBEDDING_MODEL) -> Any:
-    """Return the lazily-created singleton engine for ``model_name``.
-
-    The sentence-transformers import lives inside this function so that
-    importing this module never fails when the optional dependency is
-    absent. Callers needing vectors without the dependency receive a
-    RuntimeError carrying install guidance (the service maps that to
-    embedding-unavailable).
-    """
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError as exc:
-        raise RuntimeError(
-            "sentence-transformers (and torch) are required for embedding "
-            "vectors; install them with: pip install sentence-transformers torch. "
-            "Without them, embedding-based candidate ranking is unavailable."
-        ) from exc
-    if model_name not in _ST_MODELS:
-        _ST_MODELS[model_name] = SentenceTransformer(model_name)
-    return _ST_MODELS[model_name]
 
 
 def build_embedding_text(fact: Fact) -> str:
@@ -110,51 +86,76 @@ def lexical_score(fact_a: Fact, fact_b: Fact) -> float:
 
 
 class FactEmbedder:
-    """Embeds fact texts with a lazily-loaded sentence-transformer engine.
-
-    Construction stores configuration only and never touches the model.
-    Use :meth:`available` for an import-only readiness probe and
-    :meth:`embed` to produce unit-length vectors for ranking.
-    """
-
     dim: int = EMBEDDING_DIM
 
-    def __init__(self, model_name: str = EMBEDDING_MODEL) -> None:
+    def __init__(
+        self,
+        model_name: str = EMBEDDING_MODEL,
+        _client: MLServiceClient | None = None,
+    ) -> None:
         self.model_name = model_name
         self.dim = EMBEDDING_DIM
+        self._client = _client
+
+    def _service(self) -> MLServiceClient:
+        return self._client or MLServiceClient(base_url=settings.ml_service_url)
 
     @staticmethod
     def available() -> tuple[bool, str]:
-        """Import-only readiness probe (never downloads a model).
-
-        Returns ``(True, reason)`` when sentence-transformers is
-        importable, else ``(False, reason)``. Fail-closed: any problem
-        yields ``False`` and this method never raises.
-        """
         try:
-            import sentence_transformers  # noqa: F401
+            status = MLServiceClient(base_url=settings.ml_service_url).health(
+                timeout_s=2.0
+            )
+            embeddings = status.get("embeddings") if isinstance(status, dict) else None
+            if isinstance(embeddings, dict) and embeddings.get("available"):
+                return (True, f"ML embeddings ready ({embeddings.get('model', '?')})")
+            reason = embeddings.get("reason") if isinstance(embeddings, dict) else status
+            return (False, f"ML embeddings unavailable: {reason}")
+        except MLServiceError as exc:
+            return (False, f"ML service unreachable: {exc}")
         except Exception as exc:
-            return (False, f"sentence-transformers unavailable: {exc}")
-        return (True, f"sentence-transformers importable; model '{EMBEDDING_MODEL}' loads lazily on first embed")
+            return (False, f"ML embeddings probe failed ({type(exc).__name__}): {exc}")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        """Embed ``texts`` into unit-length vectors.
-
-        Empty input yields ``[]`` without touching the model engine.
-        Each output row is normalized to unit length when its norm is
-        positive; zero rows are returned unchanged.
-        """
         if not texts:
             return []
-        model = _get_st_model(self.model_name)
-        vectors = model.encode(texts)
-        arr = np.asarray(vectors, dtype=np.float64)
+        try:
+            payload = self._service().embed_texts(texts)
+            vectors = payload.get("vectors")
+        except MLServiceError as exc:
+            raise RuntimeError(f"ML embedding failed: {exc}") from exc
+        rows = _validated_rows(vectors)
+        arr = np.asarray(rows, dtype=np.float64)
         if arr.ndim == 1:
             arr = arr.reshape(1, -1)
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         nonzero = norms > 0
         out = np.divide(arr, np.where(nonzero, norms, 1.0))
         return [[float(x) for x in row] for row in out]
+
+
+def _validated_rows(vectors: object) -> list[list[float]]:
+    if not isinstance(vectors, list) or not vectors:
+        raise RuntimeError("ML service returned no vectors")
+    rows: list[list[float]] = []
+    for row in vectors:
+        if not isinstance(row, list) or not row:
+            raise RuntimeError("ML service returned a malformed vector")
+        values: list[float] = []
+        for value in row:
+            if isinstance(value, bool):
+                raise RuntimeError("ML service returned a malformed vector")
+            try:
+                number = float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"ML service returned a non-numeric vector: {exc}"
+                ) from exc
+            if not math.isfinite(number):
+                raise RuntimeError("ML service returned a non-finite vector")
+            values.append(number)
+        rows.append(values)
+    return rows
 
 
 def rank_candidates(

@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     groq_backoff_base_s: float = Field(default=1.0)
     groq_backoff_max_s: float = Field(default=60.0)
 
+    # Internal ML service (PaddleOCR + MiniLM over HTTP on the Compose
+    # network). Local laptop runs without Compose can point this at a
+    # locally started ML service or leave it unreachable (OCR/embedding
+    # degrade to native extraction / lexical ranking).
+    ml_service_url: str = Field(default="http://ml:8001")
+
     # Candidate discovery + relationship reasoning (deterministic-first).
     matching_top_k: int = Field(default=10)
     matching_similarity_floor: float = Field(default=0.25)

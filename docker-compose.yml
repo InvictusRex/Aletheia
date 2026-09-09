@@ -20,6 +20,8 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      # Internal ML service (OCR + embeddings) on the Compose network.
+      ML_SERVICE_URL: http://ml:8001
       OCR_ENABLED: ${OCR_ENABLED:-true}
       OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr}
       OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
@@ -28,6 +30,20 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       - db
+
+  # Internal ML runtime (PaddleOCR + MiniLM). Backend calls it over the
+  # Compose network; it is NOT published publicly and the frontend never
+  # talks to it. LLM inference stays on the Windows host (not in this image).
+  ml:
+    build:
+      context: .
+      dockerfile: ml-service/Dockerfile
+    environment:
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    expose:
+      - "8001"
 
   frontend:
     build:

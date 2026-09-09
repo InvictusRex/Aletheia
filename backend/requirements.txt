@@ -1,10 +1,3 @@
-# Aletheia backend runtime dependencies (Phase 1).
-#
-# PyTorch comes from the official CPU-only index (deployment has no GPU).
-# The '+cpu' local-version pin matches ONLY the CPU wheel (PEP 440), so the
-# CUDA/NVIDIA stack can never be resolved here.
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.14.0+cpu  # must satisfy sentence-transformers' torch>=1.11.0
 fastapi>=0.115,<0.120
 uvicorn[standard]>=0.34,<0.36
 python-multipart>=0.0.18,<1
@@ -13,10 +6,8 @@ pydantic-settings>=2.7,<3
 SQLAlchemy>=2.0,<2.1
 psycopg[binary]>=3.2,<4
 pgvector>=0.3,<0.4
+numpy>=1.26,<3
 pymupdf>=1.24,<2
 pdfplumber>=0.11,<1
-paddleocr>=3,<4
-paddlepaddle>=3.0,<4
-sentence-transformers>=3,<4
 groq>=0.37,<2
 alembic>=1.14,<2
