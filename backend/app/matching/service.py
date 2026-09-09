@@ -22,6 +22,7 @@ from app.db.repositories import (
     save_relationship,
 )
 from app.llm.judgment import GroqJudgmentTransport, judge_pair
+from app.llm.ollama import OllamaJudgmentTransport
 from app.llm.provider import LLMError
 from app.llm.rate_limit import get_shared_limiter
 from app.matching.compare import classify, compare_context, compare_numeric
@@ -65,25 +66,41 @@ def get_fact_embedder() -> FactEmbedder | None:
     return embedder
 
 
-def get_judgment_transport() -> GroqJudgmentTransport | None:
-    """Resolve the LLM judgment transport, or None without credentials."""
-    if settings.llm_provider != "groq":
-        logger.warning(
-            "unknown LLM provider %r: relationship judgment disabled",
-            settings.llm_provider,
+def get_judgment_transport() -> GroqJudgmentTransport | OllamaJudgmentTransport | None:
+    """Resolve the LLM judgment transport, or None without credentials.
+
+    ``LLM_PROVIDER=groq`` needs ``GROQ_API_KEY``; ``LLM_PROVIDER=ollama``
+    talks to ``OLLAMA_BASE_URL`` (no key). Anything else is a clear
+    configuration error. A missing Groq key degrades gracefully to
+    ``None`` (pairs stay ``NEEDS_REVIEW``) without affecting matching.
+    """
+    if settings.llm_provider == "groq":
+        if not settings.groq_api_key:
+            logger.info("no GROQ_API_KEY: relationship judgment unavailable")
+            return None
+        return GroqJudgmentTransport(
+            api_key=settings.groq_api_key,
+            model=settings.groq_model,
+            timeout_s=settings.fact_llm_timeout_s,
+            max_retries=settings.groq_max_retries,
+            limiter=get_shared_limiter(),
+            backoff_base_s=settings.groq_backoff_base_s,
+            backoff_max_s=settings.groq_backoff_max_s,
         )
-        return None
-    if not settings.groq_api_key:
-        logger.info("no GROQ_API_KEY: relationship judgment unavailable")
-        return None
-    return GroqJudgmentTransport(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        timeout_s=settings.fact_llm_timeout_s,
-        max_retries=settings.groq_max_retries,
-        limiter=get_shared_limiter(),
-        backoff_base_s=settings.groq_backoff_base_s,
-        backoff_max_s=settings.groq_backoff_max_s,
+    if settings.llm_provider == "ollama":
+        return OllamaJudgmentTransport(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            timeout_s=settings.ollama_timeout_s,
+            max_retries=settings.ollama_max_retries,
+            think=settings.ollama_think,
+            backoff_base_s=settings.ollama_backoff_base_s,
+            backoff_max_s=settings.ollama_backoff_max_s,
+            keep_alive=settings.ollama_keep_alive,
+        )
+    raise ValueError(
+        f"unknown LLM_PROVIDER {settings.llm_provider!r}: "
+        "expected 'groq' or 'ollama'"
     )
 
 
@@ -175,7 +192,7 @@ def run_matching_for_document(
     session: Session,
     document_id: str,
     embedder: FactEmbedder | None = None,
-    transport: GroqJudgmentTransport | None = None,
+    transport: GroqJudgmentTransport | OllamaJudgmentTransport | None = None,
 ) -> MatchingReport:
     """Discover candidates for one document's facts and classify them."""
     pool = list_all_facts(session)

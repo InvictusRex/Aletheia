@@ -20,6 +20,11 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-groq}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      # Local Ollama (Windows host owns the model; no key needed).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
+      OLLAMA_THINK: ${OLLAMA_THINK:-false}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:--1}
       # Internal ML service (OCR + embeddings) on the Compose network.
       ML_SERVICE_URL: http://ml:8001
       OCR_ENABLED: ${OCR_ENABLED:-true}
@@ -30,6 +35,10 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
       - db
+    # Lets host.docker.internal resolve on Linux Docker too (no-op on
+    # Docker Desktop, where it already resolves to the host).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   # Internal ML runtime (PaddleOCR + MiniLM). Backend calls it over the
   # Compose network; it is NOT published publicly and the frontend never

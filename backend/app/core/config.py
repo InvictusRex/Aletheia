@@ -27,6 +27,18 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(default="")
     groq_model: str = Field(default="openai/gpt-oss-120b")
 
+    # Local Ollama inference (no API key, no cloud calls). The host owns
+    # the model; the backend only talks HTTP to OLLAMA_BASE_URL. From
+    # Docker Desktop, host.docker.internal reaches the Windows host.
+    ollama_base_url: str = Field(default="http://host.docker.internal:11434")
+    ollama_model: str = Field(default="qwen3.5:9b")
+    ollama_think: bool | None = Field(default=None)
+    ollama_timeout_s: int = Field(default=120)
+    ollama_max_retries: int = Field(default=2)
+    ollama_backoff_base_s: float = Field(default=1.0)
+    ollama_backoff_max_s: float = Field(default=30.0)
+    ollama_keep_alive: int = Field(default=-1)
+
     # Fact extraction bounds (evidence-scoped LLM calls only). The chunk
     # bound keeps normal requests near ~1.5-2K total tokens against the
     # 8K TPM tier: one bounded chunk per serial request, no packing.

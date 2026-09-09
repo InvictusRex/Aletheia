@@ -711,7 +711,7 @@ def _render_pipeline(doc_id: str) -> None:
                 "</div>", unsafe_allow_html=True)
     if st.button("RUN FULL PIPELINE", key=f"pipe_all_{doc_id}", type="primary",
                  use_container_width=True):
-        with st.spinner("Extracting facts (real Groq calls) ..."):
+        with st.spinner("Extracting facts (real LLM calls) ..."):
             report, err = api_client.trigger_facts(doc_id)
         _pipeline_reports(doc_id)["facts"] = {"report": report, "error": err}
         if err is None:
@@ -727,7 +727,7 @@ def _render_pipeline(doc_id: str) -> None:
     col_f, col_n, col_r = st.columns(3)
     with col_f:
         if st.button("EXTRACT FACTS", key=f"pipe_facts_{doc_id}", use_container_width=True):
-            with st.spinner("Running bounded fact extraction (real Groq calls) ..."):
+            with st.spinner("Running bounded fact extraction (real LLM calls) ..."):
                 report, err = api_client.trigger_facts(doc_id)
             _pipeline_reports(doc_id)["facts"] = {"report": report, "error": err}
             st.rerun()

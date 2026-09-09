@@ -16,7 +16,7 @@ ENV_VAR = "ALETHEIA_API_URL"
 
 _READ_TIMEOUT = 30
 _UPLOAD_TIMEOUT = 300
-# Fact extraction is bounded (representative chunks, serial Groq calls
+# Fact extraction is bounded (representative chunks, serial LLM calls
 # with pacing/backoff), but a full run can still take several minutes.
 _PIPELINE_TIMEOUT = 900
 _RELATIONSHIPS_TIMEOUT = 600

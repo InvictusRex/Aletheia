@@ -30,6 +30,7 @@ from app.facts.chunking import build_chunks, select_representative_chunks
 from app.facts.prompts import build_extraction_prompt
 from app.facts.validator import build_fact
 from app.llm.groq import GroqFactsProvider
+from app.llm.ollama import OllamaFactsProvider
 from app.llm.provider import LLMError, LLMProvider
 from app.llm.rate_limit import get_shared_limiter
 from app.models import EvidenceChunk, Fact
@@ -56,26 +57,38 @@ class FactExtractionReport(BaseModel):
 def get_llm_provider() -> LLMProvider | None:
     """Resolve the configured LLM provider, or None when unavailable.
 
-    Extraction stays optional: missing keys, unknown providers, or a
+    ``LLM_PROVIDER=groq`` needs ``GROQ_API_KEY``; ``LLM_PROVIDER=ollama``
+    talks to ``OLLAMA_BASE_URL`` (no key). Anything else is a clear
+    configuration error. Extraction stays optional: missing keys or a
     missing SDK disable the layer without affecting ingestion.
     """
-    if settings.llm_provider != "groq":
-        logger.warning(
-            "unknown LLM provider %r: fact extraction disabled",
-            settings.llm_provider,
+    if settings.llm_provider == "groq":
+        if not settings.groq_api_key:
+            logger.info("no GROQ_API_KEY: fact extraction unavailable")
+            return None
+        return GroqFactsProvider(
+            api_key=settings.groq_api_key,
+            model=settings.groq_model,
+            timeout_s=settings.fact_llm_timeout_s,
+            max_retries=settings.groq_max_retries,
+            limiter=get_shared_limiter(),
+            backoff_base_s=settings.groq_backoff_base_s,
+            backoff_max_s=settings.groq_backoff_max_s,
         )
-        return None
-    if not settings.groq_api_key:
-        logger.info("no GROQ_API_KEY: fact extraction unavailable")
-        return None
-    return GroqFactsProvider(
-        api_key=settings.groq_api_key,
-        model=settings.groq_model,
-        timeout_s=settings.fact_llm_timeout_s,
-        max_retries=settings.groq_max_retries,
-        limiter=get_shared_limiter(),
-        backoff_base_s=settings.groq_backoff_base_s,
-        backoff_max_s=settings.groq_backoff_max_s,
+    if settings.llm_provider == "ollama":
+        return OllamaFactsProvider(
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            timeout_s=settings.ollama_timeout_s,
+            max_retries=settings.ollama_max_retries,
+            think=settings.ollama_think,
+            backoff_base_s=settings.ollama_backoff_base_s,
+            backoff_max_s=settings.ollama_backoff_max_s,
+            keep_alive=settings.ollama_keep_alive,
+        )
+    raise ValueError(
+        f"unknown LLM_PROVIDER {settings.llm_provider!r}: "
+        "expected 'groq' or 'ollama'"
     )
 
 
