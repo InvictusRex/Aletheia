@@ -104,7 +104,22 @@ def _valid_draft_payload():
 # ---------------------------------------------------------------------------
 
 
-def test_ollama_config_defaults():
+def test_ollama_config_defaults(monkeypatch, tmp_path):
+    for var in (
+        "LLM_PROVIDER",
+        "GROQ_API_KEY",
+        "GROQ_MODEL",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_MODEL",
+        "OLLAMA_THINK",
+        "OLLAMA_TIMEOUT_S",
+        "OLLAMA_MAX_RETRIES",
+        "OLLAMA_BACKOFF_BASE_S",
+        "OLLAMA_BACKOFF_MAX_S",
+        "OLLAMA_KEEP_ALIVE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.chdir(tmp_path)
     assert DEFAULT_OLLAMA_MODEL == "qwen3.5:9b"
     assert DEFAULT_OLLAMA_BASE_URL == "http://host.docker.internal:11434"
     fresh = Settings()
