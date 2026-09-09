@@ -17,10 +17,23 @@ Frozen precedence (``classify`` implements exactly this order):
 * (a) numeric-equivalent + compatible context + strong match -> ``CORROBORATES``
 * (b) materially-different + zero ``INCOMPATIBLE`` dims + strong match
   -> ``CONTRADICTS`` (unknowns recorded, confidence capped at 0.7)
-* (c) >=1 ``KNOWN`` differing dimension explaining the gap
-  -> ``CONTEXTUAL_DIFFERENCE``
-* (d) partial semantic overlap -> ``RELATED``
+* (c) >=1 ``KNOWN`` differing dimension explaining the gap + claims_comparable
+  gate + grounded comparison -> ``CONTEXTUAL_DIFFERENCE``
+* (d) partial semantic overlap via the claims_comparable gate + grounded
+  comparison -> ``RELATED``, else ``UNRELATED``
 * (e) otherwise -> ``UNRELATED``
+
+Grounded means comparable normalized numbers (``EXACT``/``APPROXIMATE``/
+``DIFFERENT``) or the same claim on both sides (shared canonical subject
+and predicate, or identical effective subject and predicate): text-only
+pairs about different claims are never typed, no matter the token
+overlap.
+
+``claims_comparable`` compares content tokens only: generic scaffolding
+tokens (copulas, prepositions, articles, and extraction-filler words such
+as "value" or "reported") never count toward overlap, so pairs sharing
+only boilerplate are not comparable. ``UNRELATED`` pairs are counted but
+never persisted.
 
 Two genuinely ambiguous configurations return a provisional ``RELATED`` with
 ``needs_llm=True`` so the judgment layer can arbitrate; every other outcome
@@ -61,6 +74,16 @@ _TIME_KIND_LABELS = {
 }
 
 _SEMANTIC_OVERLAP_THRESHOLD = 0.2
+
+_SCAFFOLDING_STOPWORDS = frozenset({
+    "a", "an", "the",
+    "is", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "do", "does", "did",
+    "of", "from", "in", "on", "at", "to", "for", "with", "by", "as",
+    "and", "or", "it", "its", "this", "that", "these", "those",
+    "value", "values", "amount", "amounts", "number", "numbers",
+    "total", "totals", "status", "reported", "report", "stated",
+})
 
 _DIMENSION_ORDER = (
     "entity",
@@ -307,6 +330,50 @@ def semantic_overlap(a: Fact, b: Fact) -> bool:
     return False
 
 
+def _content_tokens(text: str) -> set[str]:
+    return {t for t in _tokens(text) if t not in _SCAFFOLDING_STOPWORDS}
+
+
+def claims_comparable(a: Fact, b: Fact) -> bool:
+    a_tokens = _content_tokens(f"{a.subject} {a.predicate}")
+    b_tokens = _content_tokens(f"{b.subject} {b.predicate}")
+    union = a_tokens | b_tokens
+    if not union:
+        return False
+    return len(a_tokens & b_tokens) / len(union) >= _SEMANTIC_OVERLAP_THRESHOLD
+
+
+def _shared_canonical_claim(a: Fact, b: Fact) -> bool:
+    if not _present(a.canonical_subject) or not _present(b.canonical_subject):
+        return False
+    if not _present(a.canonical_predicate) or not _present(b.canonical_predicate):
+        return False
+    assert a.canonical_subject is not None and b.canonical_subject is not None
+    assert a.canonical_predicate is not None and b.canonical_predicate is not None
+    return (
+        a.canonical_subject.strip().casefold() == b.canonical_subject.strip().casefold()
+        and a.canonical_predicate.strip().casefold()
+        == b.canonical_predicate.strip().casefold()
+    )
+
+
+def _same_raw_claim(a: Fact, b: Fact) -> bool:
+    a_entity, b_entity = _effective_entity(a), _effective_entity(b)
+    a_pred, b_pred = _effective_predicate(a), _effective_predicate(b)
+    if not all(map(_present, (a_entity, b_entity, a_pred, b_pred))):
+        return False
+    assert a_entity is not None and b_entity is not None
+    assert a_pred is not None and b_pred is not None
+    return (
+        a_entity.strip().casefold() == b_entity.strip().casefold()
+        and a_pred.strip().casefold() == b_pred.strip().casefold()
+    )
+
+
+def _same_claim(a: Fact, b: Fact) -> bool:
+    return _shared_canonical_claim(a, b) or _same_raw_claim(a, b)
+
+
 # ---------------------------------------------------------------------------
 # Classification
 # ---------------------------------------------------------------------------
@@ -458,10 +525,14 @@ def classify(
     unknown = ctx.unknown
     strong = strong_match(a, b)
     overlap = semantic_overlap(a, b)
+    comparable = claims_comparable(a, b)
+    grounded = (
+        verdict != NumericVerdict.INCOMPARABLE
+        or _same_claim(a, b)
+    )
 
     numeric_equivalent = verdict in (NumericVerdict.EXACT, NumericVerdict.APPROXIMATE)
     materially_different = verdict == NumericVerdict.DIFFERENT
-    comparable_pair = strong or overlap
 
     if numeric_equivalent and not incompatible:
         if strong:
@@ -499,7 +570,7 @@ def classify(
             _metadata(a, b, verdict, incompatible, unknown, strong, overlap),
             False,
         )
-    if incompatible and comparable_pair:
+    if incompatible and comparable and grounded:
         explanation = _explain(
             "contextual_difference", a, b, verdict, ctx, strong, overlap, False
         )
@@ -521,7 +592,7 @@ def classify(
             _metadata(a, b, verdict, incompatible, unknown, strong, overlap),
             True,
         )
-    if overlap:
+    if comparable and grounded:
         explanation = _explain(
             "related", a, b, verdict, ctx, strong, overlap, False
         )

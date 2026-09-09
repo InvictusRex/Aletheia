@@ -28,6 +28,7 @@ from app.db.repositories import (
 )
 from app.matching.compare import (
     RELATIVE_TOLERANCE,
+    claims_comparable,
     classify,
     compare_context,
     compare_numeric,
@@ -739,3 +740,548 @@ def test_api_trigger_list_detail_and_404s(api_client, db_session):
     assert api_client.post(f"/documents/{missing}/relationships").status_code == 404
     assert api_client.get(f"/documents/{missing}/relationships").status_code == 404
     assert api_client.get(f"/relationships/{missing}").status_code == 404
+
+
+def test_canonical_only_link_payables_vs_scrip_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="accounts payable days outstanding reported",
+        predicate="days payable outstanding reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="payables_days",
+        value_text="45", value_number=45.0,
+        normalized_number=45.0, normalized_unit="days", unit="days",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="scrip code listing reported",
+        predicate="identifier code reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="scrip_code",
+        value_text="45", value_number=45.0,
+        normalized_number=45.0, normalized_unit="days", unit="days",
+    )
+    assert semantic_overlap(fact_a, fact_b) is True
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert conf == 0.9
+    assert needs_llm is False
+
+
+def test_canonical_only_link_website_vs_related_party_share_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="company website address reported",
+        predicate="official web address reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="website",
+        value_text="1", value_number=1.0,
+        normalized_number=1.0, normalized_unit="count",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="related party share reported",
+        predicate="shareholding percentage reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="related_party_share",
+        value_text="1", value_number=1.0,
+        normalized_number=1.0, normalized_unit="count",
+    )
+    assert semantic_overlap(fact_a, fact_b) is True
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert conf == 0.9
+    assert needs_llm is False
+
+
+def test_canonical_only_link_communication_date_vs_awareness_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="date of communication reported",
+        predicate="notice issue date reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="communication_date",
+        value_text="2", value_number=2.0,
+        normalized_number=2.0, normalized_unit="count",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="awareness coverage reported",
+        predicate="population reached reported",
+        canonical_subject="acme_corp",
+        canonical_predicate="awareness_coverage",
+        value_text="2", value_number=2.0,
+        normalized_number=2.0, normalized_unit="count",
+    )
+    assert semantic_overlap(fact_a, fact_b) is True
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert conf == 0.9
+    assert needs_llm is False
+
+
+def test_macro_gdp_pair_stays_contextual_difference_capable():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="real GDP growth",
+        predicate="projected",
+        canonical_subject="gdp_growth",
+        canonical_predicate="projected_growth",
+        value_text="3", value_number=3.0,
+        normalized_number=3.0, normalized_unit="percent", unit="percent",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="real gross domestic product (GDP) growth",
+        predicate="estimated growth rate",
+        canonical_subject="gdp_growth",
+        canonical_predicate="estimated_growth",
+        value_text="3", value_number=3.0,
+        normalized_number=3.0, normalized_unit="percent", unit="percent",
+    )
+    assert claims_comparable(fact_a, fact_b) is True
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CONTEXTUAL_DIFFERENCE
+    assert conf == 0.75
+    assert needs_llm is False
+
+
+def test_ebitda_pair_stays_corroboration_class():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="EBITDA",
+        predicate="annual value",
+        canonical_subject="ebitda",
+        canonical_predicate="annual_value",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="EBITDA",
+        predicate="annual value",
+        canonical_subject="ebitda",
+        canonical_predicate="annual_value",
+    )
+    assert claims_comparable(fact_a, fact_b) is True
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CORROBORATES
+    assert conf == 0.95
+    assert needs_llm is False
+
+
+def test_near_synonym_predicates_stay_comparable():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        predicate="revenue from services",
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        predicate="FY24 services revenue",
+        geography="Region Beta",
+    )
+    assert claims_comparable(fact_a, fact_b) is True
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CONTEXTUAL_DIFFERENCE
+    assert conf == 0.75
+    assert needs_llm is False
+
+
+def test_scaffolding_token_overlap_is_not_comparable():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="FY24 EBITDA",
+        predicate="value",
+        canonical_subject=None,
+        canonical_predicate=None,
+        value_text="Rs. 127 Cr",
+        value_number=127.0,
+        normalized_number=127.0,
+        normalized_unit="INR crore",
+        unit="INR crore",
+        time_text="FY24",
+        time_kind=TimeKind.FISCAL_YEAR,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="software",
+        predicate="value",
+        canonical_subject=None,
+        canonical_predicate=None,
+        value_text="Rs. 2418.03 million",
+        value_number=2418.03,
+        normalized_number=241.803,
+        normalized_unit="INR crore",
+        unit="INR crore",
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+    )
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, _conf, _expl, meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert meta["numeric_verdict"] == "DIFFERENT"
+    assert needs_llm is False
+
+
+def test_shared_company_token_is_not_comparable():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Delhivery",
+        predicate="has",
+        canonical_subject=None,
+        canonical_predicate=None,
+        value_kind=ValueKind.TEXT,
+        value_text="technology-driven systems",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Delhivery",
+        predicate="maintains",
+        canonical_subject=None,
+        canonical_predicate=None,
+        value_kind=ValueKind.TEXT,
+        value_text="contingency and redundancy",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_role_vs_identifier_same_entity_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Mr. Sahil Barua",
+        canonical_subject="sahil_barua",
+        predicate="Role",
+        canonical_predicate="role",
+        value_kind=ValueKind.TEXT,
+        value_text="Managing Director & Chief Executive Officer",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Sahil Barua",
+        canonical_subject="sahil_barua",
+        predicate="DIN",
+        canonical_predicate="din",
+        value_text="05131571",
+        value_number=5131571.0,
+        normalized_number=5131571.0,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_tenure_vs_role_text_pair_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Deepak Kapoor",
+        canonical_subject="deepak_kapoor",
+        predicate="Period of Directorship",
+        canonical_predicate="directorship_period",
+        value_kind=ValueKind.TEXT,
+        value_text="Since November 22, 2017",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Deepak Kapoor",
+        canonical_subject="deepak_kapoor",
+        predicate="role",
+        canonical_predicate="role",
+        value_kind=ValueKind.TEXT,
+        value_text="Chairperson & Non-Executive Independent Director",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_revenue_growth_vs_unrelated_percentage_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Revenue from services",
+        canonical_subject=None,
+        predicate="growth",
+        canonical_predicate=None,
+        value_text="36%",
+        value_number=36.0,
+        normalized_number=0.36,
+        normalized_unit="fraction",
+        unit="%",
+        time_text="QoQ",
+        time_kind=TimeKind.QUARTER,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="private consumption expenditure growth",
+        canonical_subject=None,
+        predicate="fell from",
+        canonical_predicate=None,
+        value_text="6.8%",
+        value_number=6.8,
+        normalized_number=0.068,
+        normalized_unit="fraction",
+        unit="%",
+        time_text="in FY23",
+        time_kind=TimeKind.FISCAL_YEAR,
+        geography=None,
+        scope_text=None,
+    )
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_identifier_pair_with_canonicals_stays_llm_provisional():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Deepak Kapoor",
+        canonical_subject="deepak_kapoor",
+        predicate="DIN",
+        canonical_predicate="din",
+        value_text="00162957",
+        value_number=162957.0,
+        normalized_number=162957.0,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Deepak Kapoor",
+        canonical_subject="deepak_kapoor",
+        predicate="DIN",
+        canonical_predicate="din",
+        value_text="00162957",
+        value_number=162957.0,
+        normalized_number=162957.0,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    rtype, conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.RELATED
+    assert conf == 0.5
+    assert needs_llm is True
+
+
+def test_matching_rerun_persists_nothing_new(db_session):
+    from app.db.models import RelationshipRow
+
+    doc_a, doc_b = uuid4(), uuid4()
+    save_facts(db_session, list(_ambiguous_pair(doc_a, doc_b)))
+    db_session.commit()
+    canned = json.dumps({
+        "relationship_type": "CORROBORATES",
+        "confidence": 0.9,
+        "explanation": "synthetic corroboration",
+    })
+    first = _run(db_session, doc_a, transport=_CannedTransport(canned))
+    assert len(first.relationships) == 1
+    assert first.skipped_existing == 0
+    second = _run(db_session, doc_a, transport=_CannedTransport(canned))
+    assert second.relationships == []
+    assert second.skipped_existing == 1
+    assert db_session.query(RelationshipRow).count() == 1
+
+
+def test_same_predicate_different_entities_text_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Sahil Barua",
+        canonical_subject="sahil_barua",
+        predicate="role",
+        canonical_predicate="role",
+        value_kind=ValueKind.TEXT,
+        value_text="Managing Director",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Deepak Kapoor",
+        canonical_subject="deepak_kapoor",
+        predicate="role",
+        canonical_predicate="role",
+        value_kind=ValueKind.TEXT,
+        value_text="Chairperson",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    assert claims_comparable(fact_a, fact_b) is True
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_scaffolding_only_overlap_is_unrelated():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(
+        doc_a, [uuid4()],
+        subject="Alpha",
+        canonical_subject=None,
+        predicate="reported status",
+        canonical_predicate=None,
+        value_kind=ValueKind.TEXT,
+        value_text="complete",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        subject="Beta",
+        canonical_subject=None,
+        predicate="reported status",
+        canonical_predicate=None,
+        value_kind=ValueKind.TEXT,
+        value_text="pending",
+        value_number=None,
+        normalized_number=None,
+        normalized_unit=None,
+        unit=None,
+        time_text=None,
+        time_kind=TimeKind.UNKNOWN,
+        geography=None,
+        scope_text=None,
+    )
+    assert claims_comparable(fact_a, fact_b) is False
+    rtype, _conf, _expl, _meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.UNRELATED
+    assert needs_llm is False
+
+
+def test_same_measure_different_geography_is_contextual_difference():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(doc_a, [uuid4()])
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        value_text="6000",
+        value_number=6000.0,
+        normalized_number=6000.0,
+        geography="Region Beta",
+    )
+    rtype, conf, _expl, meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CONTEXTUAL_DIFFERENCE
+    assert conf == 0.75
+    assert "geography" in meta["incompatible_dimensions"]
+    assert needs_llm is False
+
+
+def test_same_measure_different_period_is_contextual_difference():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(doc_a, [uuid4()])
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        value_text="6000",
+        value_number=6000.0,
+        normalized_number=6000.0,
+        time_text="FY23",
+    )
+    rtype, conf, _expl, meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CONTEXTUAL_DIFFERENCE
+    assert conf == 0.75
+    assert "time" in meta["incompatible_dimensions"]
+    assert needs_llm is False
+
+
+def test_same_claim_different_values_is_contradiction():
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(doc_a, [uuid4()])
+    fact_b = _mk_fact(
+        doc_b, [uuid4()],
+        value_text="9000",
+        value_number=9000.0,
+        normalized_number=9000.0,
+    )
+    rtype, conf, _expl, meta, needs_llm = classify(fact_a, fact_b)
+    assert rtype == RelationshipType.CONTRADICTS
+    assert conf == 0.85
+    assert meta["incompatible_dimensions"] == []
+    assert needs_llm is False
