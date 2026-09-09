@@ -92,7 +92,24 @@ __all__ = [
     "OLLAMA_TEMPERATURE",
     "OllamaFactsProvider",
     "OllamaJudgmentTransport",
+    "is_context_overflow",
 ]
+
+
+def _context_overflow_in(text: str) -> bool:
+    lowered = text.lower()
+    if "exceed_context_size_error" in lowered:
+        return True
+    return "context" in lowered and (
+        "exceed" in lowered or "too large" in lowered or "length" in lowered
+    )
+
+
+def is_context_overflow(exc: BaseException) -> bool:
+    try:
+        return _context_overflow_in(str(exc))
+    except Exception:
+        return False
 
 
 class _FatalTransport(LLMTransportError):
@@ -201,6 +218,11 @@ def _chat_once(
                 snippet = (exc.response.text or "")[:200]
             except Exception:
                 pass
+            if is_context_overflow(exc) or _context_overflow_in(snippet):
+                raise _FatalTransport(
+                    f"Ollama request exceeds model context (deterministic, "
+                    f"not retried) (model={model}): {snippet}"
+                ) from exc
             raise LLMTransportError(
                 f"Ollama HTTP {status} (model={model}): {snippet}"
             ) from exc
