@@ -171,6 +171,7 @@ class FakeFactsProvider:
         time_text: str | None = None,
         prefer_type: str | None = None,
         extra_unknown_draft: bool = False,
+        duplicate_drafts: bool = False,
         fail_on_calls: frozenset[int] = frozenset(),
     ) -> None:
         self.model_name = model
@@ -179,6 +180,7 @@ class FakeFactsProvider:
         self.time_text = time_text
         self.prefer_type = prefer_type
         self.extra_unknown_draft = extra_unknown_draft
+        self.duplicate_drafts = duplicate_drafts
         self.fail_on_calls = fail_on_calls
         self.calls = 0
         self.prompts: list[str] = []
@@ -221,6 +223,8 @@ class FakeFactsProvider:
                     confidence=0.5,
                 )
             )
+        if self.duplicate_drafts and drafts:
+            drafts.append(drafts[0].model_copy(deep=True))
         return FactExtractionBatch(drafts=drafts, model=self.model_name)
 
 
@@ -882,10 +886,10 @@ def test_selection_prefers_table_then_numeric():
     assert [c.pdf_page_number for c in picked] == [1, 3]
 
 
-def test_default_cap_is_ten():
+def test_default_cap_is_unlimited():
     from app.core.config import Settings
 
-    assert Settings().fact_max_chunks_per_document == 10
+    assert Settings().fact_max_chunks_per_document is None
 
 
 def test_service_caps_llm_calls_per_run(db_session, monkeypatch):
@@ -928,3 +932,260 @@ def test_capped_rerun_selects_same_chunks_and_skips(db_session, monkeypatch):
     assert report2.chunks_skipped == 3
     assert report2.chunks_capped == 2
     assert len(list_facts_for_document(db_session, document.id)) == 3
+
+
+def test_uncapped_run_processes_all_chunks(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "fact_max_chunks_per_document", None)
+    document, _, _ = _ingest(
+        db_session, "five-page.pdf", _make_text_pdf([SYNTHETIC_TEXT] * 5)
+    )
+    provider = FakeFactsProvider()
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+    assert provider.calls == 5
+    assert report.chunks_processed == 5
+    assert report.chunks_capped == 0
+    assert len(report.facts) == 5
+
+
+def test_nonpositive_cap_rejected(db_session, monkeypatch):
+    document, _, _ = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    for bad in (0, -2):
+        monkeypatch.setattr(settings, "fact_max_chunks_per_document", bad)
+        with pytest.raises(ValueError, match="fact_max_chunks_per_document"):
+            extract_facts_for_document(
+                db_session, document.id, provider=FakeFactsProvider()
+            )
+
+
+def test_report_counts_unique_persisted_facts(db_session):
+    document, _, _ = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    provider = FakeFactsProvider(duplicate_drafts=True)
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+    assert report.facts_skipped_duplicate == 1
+    assert len(report.facts) == 1
+    assert len({str(f.id) for f in report.facts}) == 1
+    assert len(list_facts_for_document(db_session, document.id)) == 1
+
+
+def test_duplicate_evidence_ids_deduped_in_fact():
+    doc_id = uuid4()
+    eid = uuid4()
+    draft = _draft(eid, evidence_ids=[eid, eid])
+    fact, reason = build_fact(draft, doc_id, _chunk(doc_id, eid))
+    assert reason is None
+    assert fact is not None
+    assert fact.evidence_ids == [eid]
+
+
+def test_persistence_failure_marks_chunk_failed_and_continues(
+    db_session, monkeypatch
+):
+    import app.facts.service as svc
+    from app.db.repositories import save_facts as real_save_facts
+
+    document, _, _ = _ingest(
+        db_session, "two-page.pdf", _make_text_pdf([SYNTHETIC_TEXT] * 2)
+    )
+    calls = []
+
+    def flaky(session, facts):
+        calls.append(len(facts))
+        if len(calls) == 1:
+            raise RuntimeError("synthetic storage boom")
+        return real_save_facts(session, facts)
+
+    monkeypatch.setattr(svc, "save_facts", flaky)
+    provider = FakeFactsProvider()
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+    assert provider.calls == 2
+    assert report.chunks_processed == 1
+    assert report.chunks_failed == 1
+    assert any("persistence failed" in e for e in report.errors)
+
+    monkeypatch.setattr(svc, "save_facts", real_save_facts)
+    report2 = extract_facts_for_document(
+        db_session, document.id, provider=FakeFactsProvider()
+    )
+    db_session.commit()
+    assert report2.chunks_failed == 0
+    assert len(list_facts_for_document(db_session, document.id)) == 2
+
+
+def test_estimate_tokens_scales_with_text():
+    from app.facts.chunking import estimate_tokens
+
+    assert estimate_tokens("") >= 1
+    assert estimate_tokens("x" * 300) == 150
+    short = estimate_tokens("hello")
+    long = estimate_tokens("hello world, this is much longer text")
+    assert 0 < short <= long
+
+
+def test_token_budget_splits_long_page():
+    from app.facts.chunking import _token_cost, build_chunks
+    from app.models import EvidenceType, EvidenceUnit, Page
+    from app.models.evidence import ExtractionMethod
+
+    doc_id = uuid4()
+
+    def unit(text):
+        return EvidenceUnit(
+            id=uuid4(),
+            document_id=doc_id,
+            pdf_page_number=0,
+            type=EvidenceType.TEXT,
+            text=text,
+            extraction_method=ExtractionMethod.PYMUPDF,
+        )
+
+    pages = [
+        Page(document_id=doc_id, pdf_page_number=0, width=612.0, height=792.0)
+    ]
+    evidence = [unit("w " * 300) for _ in range(4)]
+    chunks = build_chunks(doc_id, pages, evidence, max_tokens=500)
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert _token_cost(chunk.units) <= 500
+    assert sorted(u.evidence_id for c in chunks for u in c.units) == sorted(
+        u.id for u in evidence
+    )
+
+
+def test_token_budget_absent_preserves_char_only_behavior(db_session):
+    from app.db.repositories import get_document_bundle
+    from app.facts.chunking import build_chunks
+
+    document, pages, evidence = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    assert len(build_chunks(document.id, pages, evidence)) == 1
+
+
+def test_token_split_keeps_table_rows_atomic(db_session):
+    from app.facts.chunking import _split_table_group
+
+    document, _, evidence = _ingest(
+        db_session,
+        "synthetic-table.pdf",
+        _make_table_pdf(
+            ["Item", "Period A"], [[f"Alpha{i}", "740"] for i in range(6)]
+        ),
+    )
+    tables = [e for e in evidence if e.type == EvidenceType.TABLE]
+    cells = [e for e in evidence if e.type == EvidenceType.TABLE_CELL]
+    assert tables and cells
+    splits = _split_table_group(tables[0], cells, 10**9, 30)
+    assert len(splits) > 1
+    seen: list = []
+    for split in splits:
+        assert split[0].evidence_type == EvidenceType.TABLE.value
+        assert "columns:" in split[0].text
+        seen.extend(u.evidence_id for u in split[1:])
+    assert sorted(seen) == sorted(c.id for c in cells)
+
+
+def test_service_passes_computed_token_budget(db_session, monkeypatch):
+    import app.facts.service as svc
+
+    seen = {}
+    real = svc.build_chunks
+
+    def spy(*args, **kwargs):
+        seen["max_tokens"] = kwargs.get("max_tokens")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(svc, "build_chunks", spy)
+    document, _, _ = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    report = extract_facts_for_document(
+        db_session, document.id, provider=FakeFactsProvider()
+    )
+    db_session.commit()
+    budget = seen["max_tokens"]
+    assert isinstance(budget, int)
+    assert 500 <= budget < settings.llm_context_tokens
+    assert report.chunks_failed == 0
+
+
+def test_evidence_budget_formula(db_session, monkeypatch):
+    import app.facts.service as svc
+    from app.facts.chunking import estimate_tokens
+    from app.facts.prompts import build_extraction_prompt
+    from app.models import EvidenceChunk
+
+    document, _, _ = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    overhead = estimate_tokens(
+        build_extraction_prompt(
+            EvidenceChunk(document_id=document.id, pdf_page_number=0, units=[])
+        )
+    )
+    assert svc._evidence_token_budget(document.id) == (
+        settings.llm_context_tokens
+        - settings.extraction_reserved_output_tokens
+        - overhead
+        - settings.extraction_safety_margin_tokens
+    )
+    monkeypatch.setattr(settings, "llm_context_tokens", 100)
+    with pytest.raises(ValueError, match="token budget"):
+        svc._evidence_token_budget(document.id)
+
+
+def test_reserved_output_default_leaves_output_headroom():
+    from app.core.config import Settings
+
+    assert Settings().extraction_reserved_output_tokens == 1600
+    assert Settings().extraction_reserved_output_tokens > 1200
+
+
+def test_factory_caps_provider_output_at_reserved(monkeypatch):
+    import app.facts.service as svc
+
+    monkeypatch.setattr(settings, "llm_provider", "ollama")
+    provider = svc.get_llm_provider()
+    assert provider._max_output_tokens == settings.extraction_reserved_output_tokens
+    monkeypatch.setattr(settings, "llm_provider", "groq")
+    monkeypatch.setattr(settings, "groq_api_key", "k")
+    provider = svc.get_llm_provider()
+    assert provider._max_output_tokens == settings.extraction_reserved_output_tokens
+
+
+def test_prompts_fit_context_minus_reserved(db_session):
+    import app.facts.service as svc
+    from app.db.repositories import get_document_bundle
+    from app.facts.chunking import build_chunks, estimate_tokens
+    from app.facts.prompts import build_extraction_prompt
+
+    document, _, _ = _ingest(
+        db_session, "three-page.pdf", _make_text_pdf([SYNTHETIC_TEXT] * 3)
+    )
+    bundle = get_document_bundle(db_session, document.id)
+    assert bundle is not None
+    _, pages, evidence = bundle
+    budget = svc._evidence_token_budget(document.id)
+    chunks = build_chunks(
+        document.id,
+        pages,
+        evidence,
+        max_chars=settings.fact_chunk_max_chars,
+        max_tokens=budget,
+    )
+    ceiling = settings.llm_context_tokens - settings.extraction_reserved_output_tokens
+    assert chunks
+    for chunk in chunks:
+        assert estimate_tokens(build_extraction_prompt(chunk)) <= ceiling

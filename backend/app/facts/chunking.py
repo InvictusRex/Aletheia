@@ -30,7 +30,7 @@ from uuid import UUID
 
 from app.models import ChunkUnit, EvidenceChunk, EvidenceType, EvidenceUnit, Page
 
-__all__ = ["build_chunks", "select_representative_chunks"]
+__all__ = ["build_chunks", "estimate_tokens", "select_representative_chunks"]
 
 
 def _table_header_line(table_index: object, headers: object) -> str:
@@ -100,10 +100,34 @@ def _cost(units: list[ChunkUnit]) -> int:
     return sum(len(u.text) for u in units)
 
 
+_CHARS_PER_TOKEN = 2
+
+
+def estimate_tokens(text: str) -> int:
+    if not isinstance(text, str):
+        return 1
+    return max(1, -(-len(text.encode("utf-8", errors="ignore")) // _CHARS_PER_TOKEN))
+
+
+def _token_cost(units: list[ChunkUnit]) -> int:
+    from app.facts.prompts import _render_unit
+
+    return sum(estimate_tokens(_render_unit(u)) for u in units)
+
+
+def _over_budget(
+    chars: int, tokens: int, max_chars: int, max_tokens: int | None
+) -> bool:
+    if chars > max_chars:
+        return True
+    return max_tokens is not None and tokens > max_tokens
+
+
 def _split_table_group(
     table_unit: EvidenceUnit,
     cell_units: list[EvidenceUnit],
     max_chars: int,
+    max_tokens: int | None,
 ) -> list[list[ChunkUnit]]:
     """Split an oversize table ONLY at row boundaries.
 
@@ -142,13 +166,17 @@ def _split_table_group(
     splits: list[list[ChunkUnit]] = []
     current_rows: list[list[EvidenceUnit]] = []
 
-    def split_cost(row_groups: list[list[EvidenceUnit]]) -> int:
+    def split_cost(row_groups: list[list[EvidenceUnit]]) -> tuple[int, int]:
+        from app.facts.prompts import _render_unit
+
         body = "\n".join(
             " | ".join(cell.text for cell in group) for group in row_groups
         )
         table_text = header_line if not body else f"{header_line}\n{body}"
         cells_cost = sum(len(cell.text) for group in row_groups for cell in group)
-        return len(table_text) + cells_cost
+        rendered = [_render_unit(_cell_chunk_unit(cell)) for group in row_groups for cell in group]
+        cells_tokens = sum(estimate_tokens(text) for text in rendered)
+        return len(table_text) + cells_cost, estimate_tokens(table_text) + cells_tokens
 
     def flush_current() -> None:
         if not current_rows:
@@ -163,7 +191,9 @@ def _split_table_group(
         del current_rows[:]
 
     for group in rows:
-        if current_rows and split_cost([*current_rows, group]) > max_chars:
+        if current_rows and _over_budget(
+            *split_cost([*current_rows, group]), max_chars, max_tokens
+        ):
             # Row boundary split: seal the current split; the row starts
             # the next one (alone, as overflow, if it fits nowhere).
             flush_current()
@@ -177,6 +207,7 @@ def build_chunks(
     pages: list[Page],
     evidence: list[EvidenceUnit],
     max_chars: int = 2500,
+    max_tokens: int | None = None,
 ) -> list[EvidenceChunk]:
     """Group evidence into page-scoped extraction chunks (pure function).
 
@@ -185,6 +216,8 @@ def build_chunks(
     """
     if max_chars <= 0:
         raise ValueError(f"max_chars must be > 0, got {max_chars!r}")
+    if max_tokens is not None and max_tokens <= 0:
+        raise ValueError(f"max_tokens must be > 0, got {max_tokens!r}")
 
     page_by_number: dict[int, Page] = {}
     for page in pages:
@@ -243,9 +276,10 @@ def build_chunks(
 
         current: list[ChunkUnit] = []
         current_cost = 0
+        current_tokens = 0
 
         def flush() -> None:
-            nonlocal current, current_cost
+            nonlocal current, current_cost, current_tokens
             if current:
                 chunks.append(
                     EvidenceChunk(
@@ -258,24 +292,38 @@ def build_chunks(
                 )
                 current = []
                 current_cost = 0
+                current_tokens = 0
 
         def place(units: list[ChunkUnit]) -> None:
             """Place one atomic item; overflow stands alone, never dropped."""
-            nonlocal current, current_cost
+            nonlocal current, current_cost, current_tokens
             item_cost = _cost(units)
-            if current and current_cost + item_cost > max_chars:
+            item_tokens = _token_cost(units)
+            if current and (
+                current_cost + item_cost > max_chars
+                or _over_budget(0, current_tokens + item_tokens, max_chars, max_tokens)
+            ):
                 flush()
             current.extend(units)
             current_cost += item_cost
-            if item_cost > max_chars:
+            current_tokens += item_tokens
+            if _over_budget(item_cost, item_tokens, max_chars, max_tokens):
                 # Atomic-overflow path: a single over-long block (or row)
                 # goes alone in its own chunk; atomicity beats the budget.
                 flush()
 
         for group, is_table, table_unit, group_cells in items:
-            if is_table and table_unit is not None and _cost(group) > max_chars:
+            if (
+                is_table
+                and table_unit is not None
+                and _over_budget(
+                    _cost(group), _token_cost(group), max_chars, max_tokens
+                )
+            ):
                 flush()
-                for split in _split_table_group(table_unit, group_cells, max_chars):
+                for split in _split_table_group(
+                    table_unit, group_cells, max_chars, max_tokens
+                ):
                     place(split)
             else:
                 place(group)

@@ -43,11 +43,13 @@ class Settings(BaseSettings):
     # bound keeps normal requests near ~1.5-2K total tokens against the
     # 8K TPM tier: one bounded chunk per serial request, no packing.
     fact_chunk_max_chars: int = Field(default=2500)
-    # Operability bound: exhaustive LLM extraction is not viable on the
-    # free TPM tier, so each run sends at most this many representative
-    # chunks (distributed across the document, tables/numeric preferred).
-    fact_max_chunks_per_document: int = Field(default=10)
+    # Operability bound: limits extraction to representative chunks when
+    # set; None processes all eligible chunks.
+    fact_max_chunks_per_document: int | None = Field(default=None)
     fact_llm_timeout_s: int = Field(default=60)
+    llm_context_tokens: int = Field(default=4096)
+    extraction_reserved_output_tokens: int = Field(default=1600)
+    extraction_safety_margin_tokens: int = Field(default=200)
 
     # Groq request management (free-tier aware). Kept explicit and
     # separate: RPM spacing and retry/backoff bounds are independent

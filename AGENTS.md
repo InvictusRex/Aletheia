@@ -55,3 +55,18 @@ user overrides for the current task.
 - When working alongside other agents, write ONLY to the file set
   assigned to you. Never edit, move, or delete files outside it —
   report cross-cutting issues instead of fixing them yourself.
+
+## 7. Database safety
+
+- NEVER truncate, delete, drop, or reset an existing E2E/test database
+  merely to start another run. Existing results are valuable data.
+- Full-document E2E runs MUST NOT truncate the database before or after.
+- Rerun via the resumable/idempotent pipeline instead.
+- A clean database requires stated justification BEFORE any destructive
+  operation, plus a verified full backup (record path and pre-operation
+  document/fact/relationship/chunk counts) first.
+- Never overwrite or delete the only known-good backup.
+- Never auto-restore an older backup after a failure; first identify
+  which backup matches the desired state.
+- When in doubt whether data is valuable, STOP and ask instead of truncating.
+- Truncation is NEVER an implicit part of an E2E workflow.

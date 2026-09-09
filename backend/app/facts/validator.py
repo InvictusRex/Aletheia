@@ -212,7 +212,7 @@ def build_fact(
         estimate_status=estimate,
         geography=geography,
         context=dict(draft.context),
-        evidence_ids=list(draft.evidence_ids),
+        evidence_ids=list(dict.fromkeys(draft.evidence_ids)),
         extraction_confidence=draft.confidence,
         ambiguity_flags=flags,
         status=FactStatus.AMBIGUOUS if flags else FactStatus.CONFIRMED,

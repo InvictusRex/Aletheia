@@ -26,7 +26,7 @@ from app.db.repositories import (
     save_facts,
     upsert_chunk_status,
 )
-from app.facts.chunking import build_chunks, select_representative_chunks
+from app.facts.chunking import build_chunks, estimate_tokens, select_representative_chunks
 from app.facts.prompts import build_extraction_prompt
 from app.facts.validator import build_fact
 from app.llm.groq import GroqFactsProvider
@@ -74,6 +74,7 @@ def get_llm_provider() -> LLMProvider | None:
             limiter=get_shared_limiter(),
             backoff_base_s=settings.groq_backoff_base_s,
             backoff_max_s=settings.groq_backoff_max_s,
+            max_output_tokens=settings.extraction_reserved_output_tokens,
         )
     if settings.llm_provider == "ollama":
         return OllamaFactsProvider(
@@ -85,6 +86,7 @@ def get_llm_provider() -> LLMProvider | None:
             backoff_base_s=settings.ollama_backoff_base_s,
             backoff_max_s=settings.ollama_backoff_max_s,
             keep_alive=settings.ollama_keep_alive,
+            max_output_tokens=settings.extraction_reserved_output_tokens,
         )
     raise ValueError(
         f"unknown LLM_PROVIDER {settings.llm_provider!r}: "
@@ -147,6 +149,30 @@ def _validate_page_range(
         )
 
 
+def _evidence_token_budget(document_id) -> int:
+    overhead = estimate_tokens(
+        build_extraction_prompt(
+            EvidenceChunk(document_id=document_id, pdf_page_number=0, units=[])
+        )
+    )
+    budget = (
+        settings.llm_context_tokens
+        - settings.extraction_reserved_output_tokens
+        - overhead
+        - settings.extraction_safety_margin_tokens
+    )
+    if budget < 500:
+        raise ValueError(
+            "evidence token budget too small "
+            f"(context={settings.llm_context_tokens}, "
+            f"reserved={settings.extraction_reserved_output_tokens}, "
+            f"overhead={overhead}, "
+            f"safety={settings.extraction_safety_margin_tokens}): "
+            "increase llm_context_tokens or lower the reserves"
+        )
+    return budget
+
+
 def extract_facts_for_document(
     session: Session,
     document_id: str,
@@ -177,7 +203,11 @@ def extract_facts_for_document(
         return report
 
     chunks = build_chunks(
-        document.id, pages, evidence, max_chars=settings.fact_chunk_max_chars
+        document.id,
+        pages,
+        evidence,
+        max_chars=settings.fact_chunk_max_chars,
+        max_tokens=_evidence_token_budget(document.id),
     )
     # Ordinals per page over the FULL chunking (before window filtering)
     # so scoped and whole-document runs share chunk identities.
@@ -199,17 +229,18 @@ def extract_facts_for_document(
     # so reruns deterministically select the same chunks and skip the
     # completed ones instead of drifting to new chunks.
     max_chunks = settings.fact_max_chunks_per_document
-    if max_chunks < 1:
-        raise ValueError(
-            "fact_max_chunks_per_document must be >= 1, "
-            f"got {max_chunks!r}"
+    if max_chunks is not None:
+        if max_chunks < 1:
+            raise ValueError(
+                "fact_max_chunks_per_document must be >= 1, "
+                f"got {max_chunks!r}"
+            )
+        selected = select_representative_chunks(
+            [chunk for chunk, _ in indexed], max_chunks
         )
-    selected = select_representative_chunks(
-        [chunk for chunk, _ in indexed], max_chunks
-    )
-    selected_ids = {id(chunk) for chunk in selected}
-    report.chunks_capped = len(indexed) - len(selected)
-    indexed = [(c, i) for c, i in indexed if id(c) in selected_ids]
+        selected_ids = {id(chunk) for chunk in selected}
+        report.chunks_capped = len(indexed) - len(selected)
+        indexed = [(c, i) for c, i in indexed if id(c) in selected_ids]
 
     # One chunk per request, sequentially: no cross-chunk batching, so
     # table/row boundaries and evidence identity can never be disturbed
@@ -219,6 +250,14 @@ def extract_facts_for_document(
     existing_by_identity: dict[tuple, Fact] = {}
     for existing in list_facts_for_document(session, document.id):
         existing_by_identity.setdefault(_fact_identity(existing), existing)
+    seen_ids: set[str] = set()
+
+    def _report_fact(fact: Fact) -> None:
+        fid = str(fact.id)
+        if fid not in seen_ids:
+            seen_ids.add(fid)
+            report.facts.append(fact)
+
     for chunk, chunk_index in indexed:
         key = (chunk.pdf_page_number, chunk_index)
         digest = chunk_evidence_hash(chunk)
@@ -239,7 +278,7 @@ def extract_facts_for_document(
                 except (ValueError, AttributeError):
                     continue
                 if fact is not None:
-                    report.facts.append(fact)
+                    _report_fact(fact)
             continue
         try:
             result = active.extract_facts(build_extraction_prompt(chunk))
@@ -285,20 +324,48 @@ def extract_facts_for_document(
                 continue
             existing_by_identity[identity] = fact
             fresh.append(fact)
-        if fresh:
-            save_facts(session, fresh)
-        upsert_chunk_status(
-            session,
-            document.id,
-            chunk.pdf_page_number,
-            chunk_index,
-            CHUNK_COMPLETED,
-            None,
-            [f.id for f in fresh] + [f.id for f in matched],
-            digest,
-        )
-        session.commit()
-        report.facts.extend(fresh)
-        report.facts.extend(matched)
+        try:
+            if fresh:
+                save_facts(session, fresh)
+            upsert_chunk_status(
+                session,
+                document.id,
+                chunk.pdf_page_number,
+                chunk_index,
+                CHUNK_COMPLETED,
+                None,
+                [f.id for f in fresh] + [f.id for f in matched],
+                digest,
+            )
+            session.commit()
+        except Exception as exc:
+            session.rollback()
+            for fact in fresh:
+                existing_by_identity.pop(_fact_identity(fact), None)
+            upsert_chunk_status(
+                session,
+                document.id,
+                chunk.pdf_page_number,
+                chunk_index,
+                CHUNK_FAILED,
+                f"{type(exc).__name__}: {exc}",
+                [],
+                digest,
+            )
+            session.commit()
+            report.chunks_failed += 1
+            report.chunks_processed -= 1
+            report.errors.append(
+                f"page {chunk.pdf_page_number}: persistence failed: {exc}"
+            )
+            logger.warning(
+                "fact persistence failed for page %d of %s: %s",
+                chunk.pdf_page_number, document.filename, exc,
+            )
+            continue
+        for fact in fresh:
+            _report_fact(fact)
+        for fact in matched:
+            _report_fact(fact)
 
     return report
