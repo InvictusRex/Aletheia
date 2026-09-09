@@ -30,7 +30,7 @@ from uuid import UUID
 
 from app.models import ChunkUnit, EvidenceChunk, EvidenceType, EvidenceUnit, Page
 
-__all__ = ["build_chunks"]
+__all__ = ["build_chunks", "select_representative_chunks"]
 
 
 def _table_header_line(table_index: object, headers: object) -> str:
@@ -282,3 +282,55 @@ def build_chunks(
         flush()
 
     return chunks
+
+
+_TABLE_CHUNK_TYPES = frozenset(
+    {EvidenceType.TABLE.value, EvidenceType.TABLE_CELL.value}
+)
+
+
+def _representativeness(chunk: EvidenceChunk) -> tuple[int, int]:
+    """Score a chunk's fact-worthiness (pure function).
+
+    Returns ``(has_table, numeric_hits)``: table chunks first (dense
+    relational content), then chunks with more digit characters
+    (amounts, dates, counts). Document-agnostic: no filenames, pages,
+    or entity names involved.
+    """
+    has_table = 0
+    digits = 0
+    for unit in chunk.units:
+        if unit.evidence_type in _TABLE_CHUNK_TYPES:
+            has_table = 1
+        digits += sum(1 for ch in unit.text if ch.isdigit())
+    return (has_table, min(digits, 50))
+
+
+def select_representative_chunks(
+    chunks: list[EvidenceChunk], limit: int
+) -> list[EvidenceChunk]:
+    """Pick at most ``limit`` chunks spread across document order.
+
+    Pure, deterministic function: the input (already in document order)
+    is split into ``limit`` contiguous strata and the highest-scoring
+    chunk per stratum wins (ties go to the earliest chunk), so selected
+    chunks distribute across the document instead of clustering at the
+    front. Returns the picks in document order. ``limit`` must be >= 1;
+    shorter inputs pass through unchanged.
+    """
+    if limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit!r}")
+    if len(chunks) <= limit:
+        return list(chunks)
+    total = len(chunks)
+    picks: list[EvidenceChunk] = []
+    for stratum in range(limit):
+        lo = (stratum * total) // limit
+        hi = ((stratum + 1) * total) // limit
+        best = max(
+            chunks[lo:hi],
+            key=lambda c: (_representativeness(c), -chunks.index(c)),
+        )
+        picks.append(best)
+    picks.sort(key=chunks.index)
+    return picks

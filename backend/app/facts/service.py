@@ -26,7 +26,7 @@ from app.db.repositories import (
     save_facts,
     upsert_chunk_status,
 )
-from app.facts.chunking import build_chunks
+from app.facts.chunking import build_chunks, select_representative_chunks
 from app.facts.prompts import build_extraction_prompt
 from app.facts.validator import build_fact
 from app.llm.groq import GroqFactsProvider
@@ -47,6 +47,7 @@ class FactExtractionReport(BaseModel):
     chunks_processed: int = 0
     chunks_failed: int = 0
     chunks_skipped: int = 0
+    chunks_capped: int = 0
     drafts_rejected: int = 0
     facts_skipped_duplicate: int = 0
     errors: list[str] = Field(default_factory=list)
@@ -177,6 +178,25 @@ def extract_facts_for_document(
         indexed = [(c, i) for c, i in indexed if c.pdf_page_number >= start_page]
     if end_page is not None:
         indexed = [(c, i) for c, i in indexed if c.pdf_page_number <= end_page]
+
+    # Operability bound: exhaustive LLM extraction is not viable on the
+    # free TPM tier, so each run sends at most a representative subset
+    # (distributed across the run's chunks, tables/numeric preferred).
+    # Selection runs over the full eligible set BEFORE resume-skipping,
+    # so reruns deterministically select the same chunks and skip the
+    # completed ones instead of drifting to new chunks.
+    max_chunks = settings.fact_max_chunks_per_document
+    if max_chunks < 1:
+        raise ValueError(
+            "fact_max_chunks_per_document must be >= 1, "
+            f"got {max_chunks!r}"
+        )
+    selected = select_representative_chunks(
+        [chunk for chunk, _ in indexed], max_chunks
+    )
+    selected_ids = {id(chunk) for chunk in selected}
+    report.chunks_capped = len(indexed) - len(selected)
+    indexed = [(c, i) for c, i in indexed if id(c) in selected_ids]
 
     # One chunk per request, sequentially: no cross-chunk batching, so
     # table/row boundaries and evidence identity can never be disturbed

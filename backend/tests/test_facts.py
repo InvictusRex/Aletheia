@@ -811,3 +811,120 @@ def test_api_page_range_scoped_extraction(api_client, db_session, monkeypatch):
     assert provider.calls == 2
     got = api_client.get(f"/documents/{document.id}/facts")
     assert len(got.json()) == 2
+
+
+# ---------------------------------------------------------------------------
+# 13. Representative chunk cap (pure selection + service wiring)
+# ---------------------------------------------------------------------------
+
+
+def _sel_chunk(
+    page: int, text: str, etype: str = "TEXT", doc_id=None
+) -> EvidenceChunk:
+    return EvidenceChunk(
+        document_id=doc_id or uuid4(),
+        pdf_page_number=page,
+        units=[ChunkUnit(evidence_id=uuid4(), evidence_type=etype, text=text)],
+    )
+
+
+def test_selection_caps_to_limit():
+    from app.facts.chunking import select_representative_chunks
+
+    chunks = [_sel_chunk(i, f"plain prose statement {i}") for i in range(15)]
+    picked = select_representative_chunks(chunks, 10)
+    assert len(picked) == 10
+
+
+def test_selection_passthrough_under_limit():
+    from app.facts.chunking import select_representative_chunks
+
+    chunks = [_sel_chunk(i, f"note {i}") for i in range(4)]
+    assert select_representative_chunks(chunks, 10) == chunks
+
+
+def test_selection_rejects_bad_limit():
+    from app.facts.chunking import select_representative_chunks
+
+    chunks = [_sel_chunk(0, "note")]
+    with pytest.raises(ValueError, match=">= 1"):
+        select_representative_chunks(chunks, 0)
+
+
+def test_selection_deterministic():
+    from app.facts.chunking import select_representative_chunks
+
+    chunks = [_sel_chunk(i, f"item {i} with 3 numbers {i}") for i in range(20)]
+    first = [c.pdf_page_number for c in select_representative_chunks(chunks, 10)]
+    second = [c.pdf_page_number for c in select_representative_chunks(chunks, 10)]
+    assert first == second
+
+
+def test_selection_distributed_across_document():
+    from app.facts.chunking import select_representative_chunks
+
+    # Equal scores: each stratum of 2 yields its earliest chunk.
+    chunks = [_sel_chunk(i, "plain prose without digits") for i in range(20)]
+    picked = select_representative_chunks(chunks, 10)
+    assert [c.pdf_page_number for c in picked] == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+
+
+def test_selection_prefers_table_then_numeric():
+    from app.facts.chunking import select_representative_chunks
+
+    chunks = [
+        _sel_chunk(0, "plain prose without digits"),
+        _sel_chunk(1, "Item Alpha 740", etype="TABLE_CELL"),
+        _sel_chunk(2, "plain prose without digits"),
+        _sel_chunk(3, "revenue was 900 crore in the period"),
+    ]
+    picked = select_representative_chunks(chunks, 2)
+    assert [c.pdf_page_number for c in picked] == [1, 3]
+
+
+def test_default_cap_is_ten():
+    from app.core.config import Settings
+
+    assert Settings().fact_max_chunks_per_document == 10
+
+
+def test_service_caps_llm_calls_per_run(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "fact_max_chunks_per_document", 3)
+    document, _, _ = _ingest(
+        db_session, "five-page.pdf", _make_text_pdf([SYNTHETIC_TEXT] * 5)
+    )
+    provider = FakeFactsProvider()
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+
+    assert provider.calls == 3
+    assert report.chunks_processed == 3
+    assert report.chunks_capped == 2
+    assert len(report.facts) == 3
+
+
+def test_capped_rerun_selects_same_chunks_and_skips(db_session, monkeypatch):
+    monkeypatch.setattr(settings, "fact_max_chunks_per_document", 3)
+    document, _, _ = _ingest(
+        db_session, "five-page.pdf", _make_text_pdf([SYNTHETIC_TEXT] * 5)
+    )
+    first = FakeFactsProvider()
+    report1 = extract_facts_for_document(
+        db_session, document.id, provider=first
+    )
+    db_session.commit()
+    assert first.calls == 3
+
+    # Rerun selects the same 3 chunks (deterministic) and skips them;
+    # the 2 never-selected chunks stay pending without new Groq calls.
+    second = FakeFactsProvider(fail_on_calls=frozenset({1, 2, 3}))
+    report2 = extract_facts_for_document(
+        db_session, document.id, provider=second
+    )
+    db_session.commit()
+    assert second.calls == 0
+    assert report2.chunks_skipped == 3
+    assert report2.chunks_capped == 2
+    assert len(list_facts_for_document(db_session, document.id)) == 3
