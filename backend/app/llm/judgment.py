@@ -14,9 +14,17 @@ Frozen rules:
 from __future__ import annotations
 
 import json
+import logging
 import math
+import time
 from typing import Protocol
 
+from app.llm.rate_limit import (
+    RateLimiter,
+    compute_backoff_delay,
+    estimate_tokens,
+    retry_after_seconds,
+)
 from app.llm.provider import (
     LLMMalformedError,
     LLMTimeoutError,
@@ -39,6 +47,8 @@ _SDK_INSTALL_GUIDANCE = (
 )
 
 _RAW_SNIPPET_LIMIT = 500
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_TYPES = frozenset(
     {
@@ -313,11 +323,19 @@ class GroqJudgmentTransport:
         model: str = DEFAULT_JUDGMENT_MODEL,
         timeout_s: int = 60,
         max_retries: int = 2,
+        limiter: RateLimiter | None = None,
+        expected_output_tokens: int = 1000,
+        backoff_base_s: float = 1.0,
+        backoff_max_s: float = 60.0,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout_s = timeout_s
         self._max_retries = max(0, int(max_retries))
+        self._limiter = limiter
+        self._expected_output_tokens = max(0, int(expected_output_tokens))
+        self._backoff_base_s = max(0.0, float(backoff_base_s))
+        self._backoff_max_s = max(0.0, float(backoff_max_s))
 
     @property
     def model_name(self) -> str:
@@ -352,9 +370,37 @@ class GroqJudgmentTransport:
 
         client = Groq(api_key=self._api_key)
 
+        def _pace_and_maybe_wait() -> None:
+            if self._limiter is None:
+                return
+            self._limiter.acquire(
+                estimate_tokens(prompt) + self._expected_output_tokens
+            )
+
+        def _backoff(retry_number: int, exc: BaseException) -> None:
+            delay = compute_backoff_delay(
+                attempt=retry_number,
+                base_s=self._backoff_base_s,
+                max_s=self._backoff_max_s,
+                retry_after=retry_after_seconds(exc),
+            )
+            logger.info(
+                "Groq retry %d/%d after %.1fs (%s): %s",
+                retry_number,
+                self._max_retries,
+                delay,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+            if self._limiter is not None:
+                self._limiter.sleep(delay)
+            else:
+                time.sleep(delay)
+
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             last = attempt >= attempts
+            _pace_and_maybe_wait()
             try:
                 # Single SDK call site in this module.
                 response = client.chat.completions.create(
@@ -368,6 +414,7 @@ class GroqJudgmentTransport:
                         f"Groq judgment request timed out after {attempts} "
                         f"attempt(s) (model={self._model})."
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             except (
                 AuthenticationError,
@@ -385,6 +432,7 @@ class GroqJudgmentTransport:
                         f"Groq judgment transport/API error after {attempts} "
                         f"attempt(s) (model={self._model}): {exc}"
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             text = getattr(getattr(response, "choices", [None])[0], "message", None)
             text = getattr(text, "content", "") if text is not None else ""
@@ -395,6 +443,7 @@ class GroqJudgmentTransport:
                         f"Groq judgment returned empty text after {attempts} "
                         f"attempt(s) (model={self._model})."
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             return text
         raise AssertionError("unreachable: retry loop always returns or raises")  # pragma: no cover

@@ -23,6 +23,7 @@ from app.db.repositories import (
 )
 from app.llm.judgment import GroqJudgmentTransport, judge_pair
 from app.llm.provider import LLMError
+from app.llm.rate_limit import get_shared_limiter
 from app.matching.compare import classify, compare_context, compare_numeric
 from app.matching.embeddings import (
     FactEmbedder,
@@ -79,7 +80,11 @@ def get_judgment_transport() -> GroqJudgmentTransport | None:
         api_key=settings.groq_api_key,
         model=settings.groq_model,
         timeout_s=settings.fact_llm_timeout_s,
-        max_retries=settings.fact_llm_max_retries,
+        max_retries=settings.groq_max_retries,
+        limiter=get_shared_limiter(),
+        expected_output_tokens=settings.groq_expected_output_tokens,
+        backoff_base_s=settings.groq_backoff_base_s,
+        backoff_max_s=settings.groq_backoff_max_s,
     )
 
 

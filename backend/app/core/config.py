@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     fact_llm_timeout_s: int = Field(default=60)
     fact_llm_max_retries: int = Field(default=2)
 
+    # Groq request management (free-tier aware). Kept explicit and
+    # separate: request-size limit, token budget, RPM spacing, and
+    # retry/backoff bounds are independent knobs.
+    groq_max_input_tokens_per_request: int = Field(default=2000)
+    groq_expected_output_tokens: int = Field(default=1000)
+    groq_tpm_target: float = Field(default=6500.0)
+    groq_min_request_interval_s: float = Field(default=2.5)
+    groq_max_retries: int = Field(default=5)
+    groq_backoff_base_s: float = Field(default=1.0)
+    groq_backoff_max_s: float = Field(default=60.0)
+
     # Candidate discovery + relationship reasoning (deterministic-first).
     matching_top_k: int = Field(default=10)
     matching_similarity_floor: float = Field(default=0.25)

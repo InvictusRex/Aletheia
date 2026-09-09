@@ -26,22 +26,32 @@ Pydantic output for ``FactDraft``):
   semantic constraint is lost, only wire-level hints strict mode rejects.
 - ``anyOf`` (Optional fields) is preserved as-is.
 
-Retry policy mirrors the previous provider: up to ``max_retries``
-immediate retries (total attempts = 1 + ``max_retries``) on transient
-failures ONLY (rate limits, timeouts, connection errors, server errors,
-parse failures). Deterministic 4xx failures (authentication, bad
-request, permission, not-found) are raised immediately without retry.
-No sleep or backoff: prototype scale and bounded calls.
+Retry policy: up to ``max_retries`` retries (total attempts = 1 +
+``max_retries``) on transient failures ONLY (rate limits, timeouts,
+connection errors, server errors, parse failures) with bounded
+exponential backoff plus jitter — honoring provider ``Retry-After``
+subject to ``backoff_max_s``. Deterministic 4xx failures
+(authentication, bad request, permission, not-found) are raised
+immediately without retry. Pacing of request starts goes through the
+shared :class:`RateLimiter`.
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import time
 from typing import Any
 
 from pydantic import ValidationError
 
 from app.models import FactDraft
+from app.llm.rate_limit import (
+    RateLimiter,
+    compute_backoff_delay,
+    estimate_tokens,
+    retry_after_seconds,
+)
 from app.llm.provider import (
     FactExtractionBatch,
     LLMMalformedError,
@@ -51,6 +61,8 @@ from app.llm.provider import (
 )
 
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
+
+logger = logging.getLogger(__name__)
 
 _SDK_INSTALL_GUIDANCE = (
     "The 'groq' SDK is not installed. Install it with "
@@ -216,11 +228,22 @@ class GroqFactsProvider:
         model: str = DEFAULT_GROQ_MODEL,
         timeout_s: int = 60,
         max_retries: int = 2,
+        limiter: RateLimiter | None = None,
+        expected_output_tokens: int = 1000,
+        backoff_base_s: float = 1.0,
+        backoff_max_s: float = 60.0,
     ) -> None:
         self._api_key = api_key
         self._model = model
         self._timeout_s = timeout_s
         self._max_retries = max(0, int(max_retries))
+        # Pacing is opt-in at construction: the service layer passes the
+        # process-global shared limiter; direct constructions (tests)
+        # pace nothing and stay fast/deterministic.
+        self._limiter = limiter
+        self._expected_output_tokens = max(0, int(expected_output_tokens))
+        self._backoff_base_s = max(0.0, float(backoff_base_s))
+        self._backoff_max_s = max(0.0, float(backoff_max_s))
 
     @property
     def model_name(self) -> str:
@@ -266,9 +289,37 @@ class GroqFactsProvider:
         }
         client = Groq(api_key=self._api_key)
 
+        def _pace_and_maybe_wait() -> None:
+            if self._limiter is None:
+                return
+            self._limiter.acquire(
+                estimate_tokens(prompt) + self._expected_output_tokens
+            )
+
+        def _backoff(retry_number: int, exc: BaseException) -> None:
+            delay = compute_backoff_delay(
+                attempt=retry_number,
+                base_s=self._backoff_base_s,
+                max_s=self._backoff_max_s,
+                retry_after=retry_after_seconds(exc),
+            )
+            logger.info(
+                "Groq retry %d/%d after %.1fs (%s): %s",
+                retry_number,
+                self._max_retries,
+                delay,
+                type(exc).__name__,
+                str(exc)[:200],
+            )
+            if self._limiter is not None:
+                self._limiter.sleep(delay)
+            else:
+                time.sleep(delay)
+
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
             last = attempt >= attempts
+            _pace_and_maybe_wait()
             try:
                 # Single SDK call site in this codebase.
                 response = client.chat.completions.create(
@@ -283,6 +334,7 @@ class GroqFactsProvider:
                         f"Groq request timed out after {attempts} "
                         f"attempt(s) (model={self._model})."
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             except (
                 AuthenticationError,
@@ -301,6 +353,7 @@ class GroqFactsProvider:
                         f"Groq transport/API error after {attempts} "
                         f"attempt(s) (model={self._model}): {exc}"
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             try:
                 content = response.choices[0].message.content
@@ -312,6 +365,7 @@ class GroqFactsProvider:
                         f"{attempts} attempt(s) (model={self._model}): "
                         f"{exc.message} | raw snippet: {exc.snippet!r}"
                     ) from exc
+                _backoff(attempt, exc)
                 continue
             return FactExtractionBatch(drafts=drafts, model=self._model)
         raise AssertionError("unreachable: retry loop always returns or raises")  # pragma: no cover

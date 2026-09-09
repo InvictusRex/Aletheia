@@ -12,11 +12,13 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.repositories import get_document_bundle, save_facts
+from app.facts.batching import batch_chunks, merge_chunks
 from app.facts.chunking import build_chunks
 from app.facts.prompts import build_extraction_prompt
 from app.facts.validator import build_fact
 from app.llm.groq import GroqFactsProvider
 from app.llm.provider import LLMError, LLMProvider
+from app.llm.rate_limit import get_shared_limiter
 from app.models import Fact
 
 logger = logging.getLogger(__name__)
@@ -50,7 +52,11 @@ def get_llm_provider() -> LLMProvider | None:
         api_key=settings.groq_api_key,
         model=settings.groq_model,
         timeout_s=settings.fact_llm_timeout_s,
-        max_retries=settings.fact_llm_max_retries,
+        max_retries=settings.groq_max_retries,
+        limiter=get_shared_limiter(),
+        expected_output_tokens=settings.groq_expected_output_tokens,
+        backoff_base_s=settings.groq_backoff_base_s,
+        backoff_max_s=settings.groq_backoff_max_s,
     )
 
 
@@ -72,27 +78,35 @@ def extract_facts_for_document(
     chunks = build_chunks(
         document.id, pages, evidence, max_chars=settings.fact_chunk_max_chars
     )
+    batches = batch_chunks(
+        chunks, max_input_tokens=settings.groq_max_input_tokens_per_request
+    )
+    logger.info(
+        "fact extraction batching for %s: %d chunks in %d request batches",
+        document.filename, len(chunks), len(batches),
+    )
     all_facts: list[Fact] = []
-    for chunk in chunks:
+    for batch_chunks_list in batches:
+        batch = merge_chunks(batch_chunks_list)
         try:
-            batch = active.extract_facts(build_extraction_prompt(chunk))
+            result = active.extract_facts(build_extraction_prompt(batch))
         except LLMError as exc:
             report.chunks_failed += 1
             report.errors.append(
-                f"page {chunk.pdf_page_number}: {type(exc).__name__}: {exc}"
+                f"page {batch.pdf_page_number}: {type(exc).__name__}: {exc}"
             )
             logger.warning(
                 "fact extraction failed for page %d of %s: %s",
-                chunk.pdf_page_number, document.filename, exc,
+                batch.pdf_page_number, document.filename, exc,
             )
             continue
         report.chunks_processed += 1
-        for draft in batch.drafts:
-            fact, reason = build_fact(draft, document.id, chunk)
+        for draft in result.drafts:
+            fact, reason = build_fact(draft, document.id, batch)
             if fact is None:
                 report.drafts_rejected += 1
                 report.errors.append(
-                    f"page {chunk.pdf_page_number}: rejected draft: {reason}"
+                    f"page {batch.pdf_page_number}: rejected draft: {reason}"
                 )
                 continue
             all_facts.append(fact)
