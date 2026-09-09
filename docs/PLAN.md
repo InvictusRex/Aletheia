@@ -1259,6 +1259,8 @@ Do not use Next.js unless there is a concrete reason.
 
 SSR is not required.
 
+Deliberate deviation (implemented): the prototype frontend is Streamlit (see frontend/app.py), not React/Vite/Tailwind. A small understandable prototype was chosen because the backend knowledge layer is the core assignment; the React specification above is retained as the original plan.
+
 The UI should prioritize:
 
 - Explainability over aesthetics.

@@ -711,9 +711,6 @@ def _render_pipeline(doc_id: str) -> None:
                 "</div>", unsafe_allow_html=True)
     if st.button("RUN FULL PIPELINE", key=f"pipe_all_{doc_id}", type="primary",
                  use_container_width=True):
-        # Sequential stages sharing one status line. A transport-level
-        # failure stops the chain; per-chunk errors inside a 200 report
-        # do not (partial results stay preserved and visible).
         with st.spinner("Extracting facts (real Groq calls) ..."):
             report, err = api_client.trigger_facts(doc_id)
         _pipeline_reports(doc_id)["facts"] = {"report": report, "error": err}

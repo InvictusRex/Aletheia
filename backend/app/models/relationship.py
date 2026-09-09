@@ -60,15 +60,6 @@ class ContextComparison(BaseModel):
         )
 
 
-class CandidatePair(BaseModel):
-    """One ordered candidate pair. Scores rank only — never classify."""
-
-    fact_a_id: UUID
-    fact_b_id: UUID
-    score: float = Field(ge=0.0, le=1.0)
-    source: str = "vector"
-
-
 class Relationship(BaseModel):
     """Persisted relationship. fact_a_id/fact_b_id stored id-ordered."""
 

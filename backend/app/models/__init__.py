@@ -23,7 +23,6 @@ from app.models.fact import (
 )
 from app.models.page import Page, QualityVerdict
 from app.models.relationship import (
-    CandidatePair,
     ContextComparison,
     DimensionVerdict,
     NumericVerdict,
@@ -34,7 +33,6 @@ from app.models.relationship import (
 )
 
 __all__ = [
-    "CandidatePair",
     "ChunkUnit",
     "ContextComparison",
     "DimensionVerdict",

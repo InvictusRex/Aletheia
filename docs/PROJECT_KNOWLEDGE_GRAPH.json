@@ -120,7 +120,7 @@
       "date": "2026-09-08",
       "id": "decision-013-fact-layer",
       "rationale": "LLM proposes drafts, deterministic code disposes; evidence IDs enforced, numerics/dates parsed locally, no fabrication.",
-      "status": "accepted",
+      "status": "superseded",
       "title": "Evidence-scoped Gemini drafts with deterministic validation"
     },
     {
@@ -190,15 +190,15 @@
   ],
   "implementation_state": {
     "phase": "backend-feature-complete",
-    "testing": "pytest 185 passed (health, extraction, pipeline, documents API, tables, OCR, facts, normalization, matching, search, serial Groq pacing/retry/JSON)",
+    "testing": "pytest 259 passed (backend incl. ML-service boundary, ingestion, facts, matching, search + ml-service endpoints)",
     "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live; no ANN index (exact scan at prototype scale)",
     "notes": [
-      "Backend feature-complete for core assignment (Phases 0-10); frontend next.",
+      "Backend feature-complete for core assignment (Phases 0-10); Streamlit frontend implemented (frontend/app.py).",
       "Live POST /search verified: ranked facts with evidence/provenance, document filtering, read-only.",
       "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
-      "LLM provider is Groq (openai/gpt-oss-120b); live fact + judgment smoke tests passed.",
+      "LLM providers are Groq (default, openai/gpt-oss-120b) plus a local Ollama option (LLM_PROVIDER=ollama); live Groq fact + judgment smoke tests passed.",
       "Groq request management: serial one-chunk-per-request, 2.5s start spacing, temperature 0, 2000 max output tokens, 5 bounded retries honoring Retry-After.",
-      "Next: macro acceptance dataset run, then Phase 11 frontend."
+      "Next: macro acceptance dataset run."
     ]
   },
   "invariants": [
@@ -244,7 +244,7 @@
     {
       "id": "docker-compose",
       "path": "docker-compose.yml",
-      "responsibility": "Reproducible local setup: db + backend services, env-based config.",
+      "responsibility": "Reproducible local setup: db + backend + ml + frontend services, env-based config.",
       "type": "infrastructure"
     },
     {
@@ -315,8 +315,8 @@
     },
     {
       "id": "llm-provider",
-      "path": "backend/app/llm/provider.py + groq.py",
-      "responsibility": "Sync LLM transport abstraction; Groq adapter on the groq SDK with strict JSON Schema output, retries, lazy SDK.",
+      "path": "backend/app/llm/provider.py + groq.py + ollama.py",
+      "responsibility": "Sync LLM transport abstraction; Groq adapter on the groq SDK with strict JSON Schema output, retries, lazy SDK; Ollama adapter for local inference, selected via LLM_PROVIDER.",
       "type": "component"
     },
     {
@@ -387,8 +387,8 @@
     },
     {
       "id": "search-tests",
-      "path": "backend/tests/test_search.py + test_llm_schema.py",
-      "responsibility": "Search behavior/contract tests with faked embeddings; schema sanitizer unit tests; no network or keys.",
+      "path": "backend/tests/test_search.py",
+      "responsibility": "Search behavior/contract tests with faked embeddings; no network or keys.",
       "type": "testing"
     },
     {
@@ -399,8 +399,8 @@
     },
     {
       "id": "evidence-batching",
-      "path": "backend/app/facts/service.py (removed module)",
-      "responsibility": "REMOVED: was token-aware grouping of chunks into requests; now one chunk per request, tables atomic via chunking, IDs preserved.",
+      "path": "backend/app/facts/service.py",
+      "responsibility": "Serial one-chunk-per-request orchestration with provider selection (Groq/Ollama) and per-chunk persistence; token-aware batching removed.",
       "type": "component"
     },
     {
@@ -431,7 +431,6 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "phase-11-frontend",
       "phase-12-evaluation",
       "phase-13-demo"
     ],
@@ -448,7 +447,7 @@
       "phase-9",
       "phase-10"
     ],
-    "next": "phase-11-frontend"
+    "next": "phase-12-evaluation"
   },
   "relationships": [
     {

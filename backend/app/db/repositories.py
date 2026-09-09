@@ -4,12 +4,20 @@ from __future__ import annotations
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models import DocumentRow, EvidenceUnitRow, PageRow
-from app.db.models import ExtractionChunkRow
-from app.models import Document, EvidenceUnit, Page
+from app.db.models import (
+    DocumentRow,
+    EvidenceUnitRow,
+    ExtractionChunkRow,
+    FactEmbeddingRow,
+    FactEvidenceRow,
+    FactRow,
+    PageRow,
+    RelationshipRow,
+)
+from app.models import Document, EvidenceUnit, Fact, Page, Relationship
 
 
 def _status_str(document: Document) -> str:
@@ -195,10 +203,6 @@ def list_documents(session: Session) -> list[Document]:
     ]
 
 
-from app.db.models import FactEvidenceRow, FactRow  # noqa: E402 -- appended; existing imports above untouched
-from app.models.fact import Fact  # noqa: E402 -- appended; existing imports above untouched
-
-
 def _value_kind_str(fact: Fact) -> str:
     value = fact.value_kind
     return value.value if hasattr(value, "value") else str(value)
@@ -319,25 +323,7 @@ def list_facts_for_document(session: Session, document_id: UUID) -> list[Fact]:
             .order_by(FactRow.id)
         ).all()
     )
-    # Ensure id-string ordering for determinism (UUID order matches
-    # lexicographic string order, but sort explicitly per the contract).
-    fact_rows.sort(key=lambda r: str(r.id))
-    if not fact_rows:
-        return []
-    fact_ids = [r.id for r in fact_rows]
-    link_rows = list(
-        session.scalars(
-            select(FactEvidenceRow)
-            .where(FactEvidenceRow.fact_id.in_(fact_ids))
-            .order_by(FactEvidenceRow.evidence_id)
-        ).all()
-    )
-    # Ensure evidence id-string ordering within each fact.
-    link_rows.sort(key=lambda r: (str(r.fact_id), str(r.evidence_id)))
-    by_fact: dict[UUID, list[UUID]] = {fid: [] for fid in fact_ids}
-    for link in link_rows:
-        by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
-    return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]
+    return _hydrate_facts(session, fact_rows)
 
 
 def get_fact(session: Session, fact_id: UUID) -> Fact | None:
@@ -378,11 +364,6 @@ def update_fact_normalization(session: Session, fact: Fact) -> bool:
     row.ambiguity_flags = list(fact.ambiguity_flags)
     session.flush()
     return True
-
-
-from sqlalchemy import or_  # noqa: E402 -- appended for R-DB; existing imports above untouched
-from app.db.models import FactEmbeddingRow, RelationshipRow  # noqa: E402 -- appended for R-DB; existing imports above untouched
-from app.models.relationship import Relationship  # noqa: E402 -- appended for R-DB; existing imports above untouched
 
 
 def _rel_type_str(rel: Relationship) -> str:
@@ -553,22 +534,7 @@ def list_all_facts(session: Session) -> list[Fact]:
     pool for matching; filters apply in the service layer.
     """
     fact_rows = list(session.scalars(select(FactRow).order_by(FactRow.id)).all())
-    fact_rows.sort(key=lambda r: str(r.id))
-    if not fact_rows:
-        return []
-    fact_ids = [r.id for r in fact_rows]
-    link_rows = list(
-        session.scalars(
-            select(FactEvidenceRow)
-            .where(FactEvidenceRow.fact_id.in_(fact_ids))
-            .order_by(FactEvidenceRow.evidence_id)
-        ).all()
-    )
-    link_rows.sort(key=lambda r: (str(r.fact_id), str(r.evidence_id)))
-    by_fact: dict[UUID, list[UUID]] = {fid: [] for fid in fact_ids}
-    for link in link_rows:
-        by_fact.setdefault(link.fact_id, []).append(link.evidence_id)
-    return [_fact_from_row(r, by_fact.get(r.id, [])) for r in fact_rows]
+    return _hydrate_facts(session, fact_rows)
 
 
 def _hydrate_facts(session: Session, fact_rows: list[FactRow]) -> list[Fact]:

@@ -34,10 +34,10 @@ class DocumentBundle(BaseModel):
 
 
 @router.post("", response_model=IngestResponse, status_code=201)
-async def ingest_document(
+def ingest_document(
     file: UploadFile, db: Session = Depends(get_db)
 ) -> IngestResponse:
-    data = await file.read()
+    data = file.file.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="PDF exceeds 50 MB limit")
     if len(data) < 4 or data[:4] != b"%PDF":

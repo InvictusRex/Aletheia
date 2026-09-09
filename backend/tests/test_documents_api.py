@@ -110,3 +110,11 @@ def test_get_documents_lists_ingested_pdfs(api_client):
             "FAILED",
             "PARTIAL",
         )
+
+
+def test_ingest_route_is_sync_def():
+    import asyncio
+
+    from app.api.documents import ingest_document
+
+    assert not asyncio.iscoroutinefunction(ingest_document)

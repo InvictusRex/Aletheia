@@ -6,12 +6,14 @@ rows store enums as plain strings.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -48,6 +50,11 @@ class DocumentRow(Base):
         passive_deletes=True,
     )
     evidence_units: Mapped[list[EvidenceUnitRow]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    facts: Mapped[list[FactRow]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -103,10 +110,6 @@ class EvidenceUnitRow(Base):
     document: Mapped[DocumentRow] = relationship(back_populates="evidence_units")
 
 
-from datetime import date  # noqa: E402 -- appended for FactRow date hints; existing imports above untouched
-from sqlalchemy import Date  # noqa: E402 -- appended for FactRow Date columns; existing import block untouched
-
-
 class FactRow(Base):
     __tablename__ = "facts"
     __table_args__ = (
@@ -153,19 +156,6 @@ class FactEvidenceRow(Base):
     evidence_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("evidence_units.id", ondelete="CASCADE"), primary_key=True
     )
-
-
-# Corresponding collection on DocumentRow. Assigned post-hoc so the existing
-# DocumentRow definition above is preserved byte-for-byte.
-DocumentRow.facts: Mapped[list["FactRow"]] = relationship(
-    "FactRow",
-    back_populates="document",
-    cascade="all, delete-orphan",
-    passive_deletes=True,
-)
-
-
-from pgvector.sqlalchemy import Vector  # noqa: E402 -- appended for R-DB embeddings; existing imports above untouched
 
 
 class FactEmbeddingRow(Base):
