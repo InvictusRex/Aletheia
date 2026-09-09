@@ -86,3 +86,27 @@ def test_get_unknown_uuid_404(api_client):
 def test_get_malformed_uuid_422(api_client):
     response = api_client.get("/documents/not-a-uuid")
     assert response.status_code == 422
+
+
+def test_get_documents_lists_ingested_pdfs(api_client):
+    first = _upload_pdf(api_client, [DENSE_TEXT], filename="a.pdf")
+    second = _upload_pdf(api_client, [DENSE_TEXT], filename="b.pdf")
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    response = api_client.get("/documents")
+    assert response.status_code == 200
+    body = response.json()
+    assert isinstance(body, list)
+    assert len(body) == 2
+    filenames = [d["filename"] for d in body]
+    assert filenames == ["a.pdf", "b.pdf"]
+    for doc in body:
+        assert doc["id"]
+        assert doc["ingestion_status"] in (
+            "UPLOADED",
+            "PROCESSING",
+            "COMPLETED",
+            "FAILED",
+            "PARTIAL",
+        )

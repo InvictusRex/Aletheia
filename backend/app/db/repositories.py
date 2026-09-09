@@ -167,6 +167,33 @@ def get_document_bundle(
     return document, pages, evidence
 
 
+def list_documents(session: Session) -> list[Document]:
+    """List all documents, ordered by creation time then id string.
+
+    Minimal read-only helper for the frontend workspace overview.
+    """
+    rows = list(
+        session.scalars(
+            select(DocumentRow).order_by(DocumentRow.created_at, DocumentRow.id)
+        ).all()
+    )
+    rows.sort(key=lambda r: (r.created_at, str(r.id)))
+    return [
+        Document(
+            id=r.id,
+            filename=r.filename,
+            title=r.title,
+            source=r.source,
+            page_count=r.page_count,
+            file_sha256=r.file_sha256,
+            ingestion_status=r.ingestion_status,
+            error=r.error,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
 from app.db.models import FactEvidenceRow, FactRow  # noqa: E402 -- appended; existing imports above untouched
 from app.models.fact import Fact  # noqa: E402 -- appended; existing imports above untouched
 

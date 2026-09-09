@@ -1,0 +1,10 @@
+[theme]
+base = "dark"
+
+[server]
+port = 8501
+headless = true
+
+[client]
+showSidebarNavigation = false
+toolbarMode = "minimal"

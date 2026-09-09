@@ -29,5 +29,16 @@ services:
     depends_on:
       - db
 
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    environment:
+      ALETHEIA_API_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-8501}:8501"
+    depends_on:
+      - backend
+
 volumes:
   pgdata:

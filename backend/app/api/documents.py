@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.repositories import get_document_bundle, save_ingestion
+from app.db.repositories import get_document_bundle, list_documents, save_ingestion
 from app.db.session import get_db
 from app.extraction.pipeline import run_ingestion
 from app.models import Document, EvidenceUnit, Page
@@ -60,6 +60,12 @@ async def ingest_document(
         evidence_count=len(evidence),
         bad_pages=bad_pages,
     )
+
+
+@router.get("", response_model=list[Document])
+def list_all_documents(db: Session = Depends(get_db)) -> list[Document]:
+    """List all ingested documents (read-only workspace overview)."""
+    return list_documents(db)
 
 
 @router.get("/{document_id}", response_model=DocumentBundle)
