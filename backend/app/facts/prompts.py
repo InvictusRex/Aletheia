@@ -56,7 +56,9 @@ def build_extraction_prompt(chunk: EvidenceChunk) -> str:
     lines.append(
         "3. Preserve values verbatim as written in the evidence, including "
         "their units and qualifiers; do not convert, round, or rephrase values. "
-        "Do NOT perform unit conversion."
+        "Do NOT perform unit conversion. Preserve currency symbols verbatim "
+        "as written, including ₹, $, €, £; never substitute, drop, "
+        "or transliterate them."
     )
     lines.append(
         "4. Each draft states a subject, a predicate, and a value, plus the "
@@ -79,6 +81,11 @@ def build_extraction_prompt(chunk: EvidenceChunk) -> str:
     lines.append(
         "8. Prefer fewer highly reliable facts over many speculative facts. "
         "If a chunk is ambiguous, omit the fact."
+    )
+    lines.append(
+        "9. Extract substantive knowledge only; exclude URLs, contact details, "
+        "filing identifiers, stock/scrip codes, boilerplate addresses, and "
+        "routine administrative metadata unless genuinely substantive."
     )
     lines.append("")
     lines.append(

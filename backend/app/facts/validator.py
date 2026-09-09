@@ -174,6 +174,9 @@ def build_fact(
         return None, f"unknown evidence IDs: {', '.join(unknown)}"
 
     kind, flags = resolve_kind(draft)
+    if kind in (ValueKind.NUMERIC, ValueKind.PERCENTAGE):
+        if re.match(r"^[A-Za-z] [\d,.]", draft.value_text.strip()):
+            flags.append("currency_symbol_suspect")
     number = parse_number(draft.value_text) if kind != ValueKind.TEXT else None
     if kind != ValueKind.TEXT and number is None:
         flags.append("value_unparseable")
