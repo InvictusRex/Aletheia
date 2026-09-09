@@ -24,6 +24,7 @@ from pydantic import ValidationError
 import app.api.facts as facts_api
 from app.core.config import settings
 from app.db.repositories import (
+    get_chunk_statuses,
     get_document_bundle,
     get_fact,
     list_facts_for_document,
@@ -518,7 +519,7 @@ def test_api_post_stubbed_extraction_then_get_persisted(
         **_fact_kwargs(document.id, evidence[0].id),
     )
 
-    def _stub(db, document_id, provider=None):
+    def _stub(db, document_id, provider=None, **kwargs):
         save_facts(db, [wanted])
         return FactExtractionReport(
             document_id=str(document_id),
@@ -575,3 +576,238 @@ def test_groq_custom_model_reflected_and_carried_by_batches():
     assert batch.model == "custom-model-x"
     # No extract_facts call on the real class anywhere in this module:
     # construction only, so no network access is possible.
+
+
+# ---------------------------------------------------------------------------
+# 11. Per-chunk persistence + resume (duck-typed fakes only, no network)
+# ---------------------------------------------------------------------------
+
+
+def test_per_chunk_progress_rows_persisted(db_session):
+    document, _, evidence = _ingest(
+        db_session,
+        "two-page.pdf",
+        _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT]),
+    )
+    provider = FakeFactsProvider()
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+
+    assert report.chunks_processed == 2
+    assert report.chunks_failed == 0
+    assert len(report.facts) == 2
+    statuses = get_chunk_statuses(db_session, document.id)
+    assert len(statuses) == 2
+    assert {(p, i) for p, i in statuses} == {(0, 0), (1, 0)}
+    for row in statuses.values():
+        assert row.status == "COMPLETED"
+        assert row.error is None
+        assert len(row.fact_ids) == 1
+        assert get_fact(db_session, UUID(str(row.fact_ids[0]))) is not None
+
+
+def test_failed_chunk_preserves_prior_success(db_session):
+    document, _, _ = _ingest(
+        db_session,
+        "two-page.pdf",
+        _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT]),
+    )
+    provider = FakeFactsProvider(fail_on_calls=frozenset({2}))
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider
+    )
+    db_session.commit()
+
+    assert report.chunks_processed == 1
+    assert report.chunks_failed == 1
+    assert len(report.facts) == 1
+    statuses = get_chunk_statuses(db_session, document.id)
+    assert statuses[(0, 0)].status == "COMPLETED"
+    assert statuses[(1, 0)].status == "FAILED"
+    assert statuses[(1, 0)].error
+    # The successful chunk's fact survived the later failure.
+    assert len(list_facts_for_document(db_session, document.id)) == 1
+
+
+def test_rerun_skips_completed_without_recalling_provider(db_session):
+    document, _, _ = _ingest(
+        db_session,
+        "two-page.pdf",
+        _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT]),
+    )
+    first = FakeFactsProvider()
+    report1 = extract_facts_for_document(
+        db_session, document.id, provider=first
+    )
+    db_session.commit()
+    assert report1.chunks_processed == 2
+
+    # Any provider call now would raise: resume must make zero calls.
+    second = FakeFactsProvider(fail_on_calls=frozenset({1, 2, 3}))
+    report2 = extract_facts_for_document(
+        db_session, document.id, provider=second
+    )
+    db_session.commit()
+
+    assert second.calls == 0
+    assert report2.chunks_processed == 0
+    assert report2.chunks_failed == 0
+    assert report2.chunks_skipped == 2
+    assert len(report2.facts) == 2  # rehydrated from progress rows
+    assert len(list_facts_for_document(db_session, document.id)) == 2
+
+
+def test_legacy_facts_dedupe_without_progress_rows(db_session):
+    from app.db.models import ExtractionChunkRow
+
+    document, _, _ = _ingest(
+        db_session,
+        "two-page.pdf",
+        _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT]),
+    )
+    report1 = extract_facts_for_document(
+        db_session, document.id, provider=FakeFactsProvider()
+    )
+    db_session.commit()
+    assert len(report1.facts) == 2
+
+    # Simulate pre-progress facts: drop progress rows, keep facts.
+    db_session.query(ExtractionChunkRow).delete()
+    db_session.commit()
+    assert get_chunk_statuses(db_session, document.id) == {}
+
+    report2 = extract_facts_for_document(
+        db_session, document.id, provider=FakeFactsProvider()
+    )
+    db_session.commit()
+
+    # Re-extraction ran (no rows to skip) but inserted no duplicates.
+    assert report2.chunks_processed == 2
+    assert report2.facts_skipped_duplicate == 2
+    assert len(list_facts_for_document(db_session, document.id)) == 2
+
+    # Progress rows were rebuilt with intact fact links: a third run
+    # skips everything without calling the provider.
+    third = FakeFactsProvider(fail_on_calls=frozenset({1, 2, 3}))
+    report3 = extract_facts_for_document(
+        db_session, document.id, provider=third
+    )
+    db_session.commit()
+    assert third.calls == 0
+    assert report3.chunks_skipped == 2
+    assert len(report3.facts) == 2
+
+
+# ---------------------------------------------------------------------------
+# 12. Page-range scoping (service filter + API validation)
+# ---------------------------------------------------------------------------
+
+
+def test_page_range_limits_chunks_to_window(db_session):
+    document, _, evidence = _ingest(
+        db_session,
+        "two-page.pdf",
+        _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT]),
+    )
+    by_page = {}
+    for unit in evidence:
+        by_page.setdefault(unit.pdf_page_number, set()).add(unit.id)
+    assert set(by_page) == {0, 1}
+
+    provider = FakeFactsProvider()
+    report = extract_facts_for_document(
+        db_session, document.id, provider=provider, start_page=0, end_page=0
+    )
+    db_session.commit()
+
+    assert provider.calls == 1
+    assert report.chunks_processed == 1
+    assert len(report.facts) == 1
+    assert set(report.facts[0].evidence_ids) <= by_page[0]
+    statuses = get_chunk_statuses(db_session, document.id)
+    assert set(statuses) == {(0, 0)}  # page 1 still pending
+
+    # A full rerun resumes: page 0 skipped, page 1 processed.
+    full = FakeFactsProvider()
+    report_full = extract_facts_for_document(
+        db_session, document.id, provider=full
+    )
+    db_session.commit()
+    assert full.calls == 1
+    assert report_full.chunks_skipped == 1
+    assert report_full.chunks_processed == 1
+    assert len(list_facts_for_document(db_session, document.id)) == 2
+
+
+def test_page_range_validation_rejects_nonsense(db_session):
+    document, _, _ = _ingest(
+        db_session, "synthetic.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    with pytest.raises(ValueError, match="must be <="):
+        extract_facts_for_document(
+            db_session, document.id, provider=FakeFactsProvider(),
+            start_page=2, end_page=1,
+        )
+    with pytest.raises(ValueError, match=">= 0"):
+        extract_facts_for_document(
+            db_session, document.id, provider=FakeFactsProvider(),
+            start_page=-1,
+        )
+    with pytest.raises(ValueError, match=">= 0"):
+        extract_facts_for_document(
+            db_session, document.id, provider=FakeFactsProvider(),
+            end_page=-1,
+        )
+
+
+def test_api_page_range_400_on_inverted_window(api_client, db_session):
+    document, _, _ = _ingest(
+        db_session, "api-range.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    resp = api_client.post(
+        f"/documents/{document.id}/facts?start_page=3&end_page=1"
+    )
+    assert resp.status_code == 400
+
+
+def test_api_page_range_422_on_negative(api_client, db_session):
+    document, _, _ = _ingest(
+        db_session, "api-range.pdf", _make_text_pdf([SYNTHETIC_TEXT])
+    )
+    resp = api_client.post(
+        f"/documents/{document.id}/facts?start_page=-1"
+    )
+    assert resp.status_code == 422
+
+
+def test_api_page_range_scoped_extraction(api_client, db_session, monkeypatch):
+    pdf = _make_text_pdf([SYNTHETIC_TEXT, SYNTHETIC_TEXT])
+    document, _, evidence = _ingest(db_session, "api-scope.pdf", pdf)
+    provider = FakeFactsProvider()
+    # Route the API through the fake: patch the service reference used
+    # by extract_facts_for_document when no provider is passed.
+    import app.facts.service as facts_service
+
+    monkeypatch.setattr(facts_service, "get_llm_provider", lambda: provider)
+
+    resp = api_client.post(
+        f"/documents/{document.id}/facts?start_page=1&end_page=1"
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["chunks_processed"] == 1
+    assert provider.calls == 1
+    page1_ids = {e.id for e in evidence if e.pdf_page_number == 1}
+    assert set(body["facts"][0]["evidence_ids"]) <= {
+        str(i) for i in page1_ids
+    }
+
+    # Unscoped rerun resumes the remaining page only.
+    resp2 = api_client.post(f"/documents/{document.id}/facts")
+    assert resp2.status_code == 200
+    assert resp2.json()["chunks_skipped"] == 1
+    assert provider.calls == 2
+    got = api_client.get(f"/documents/{document.id}/facts")
+    assert len(got.json()) == 2

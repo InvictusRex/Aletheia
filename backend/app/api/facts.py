@@ -6,7 +6,7 @@ explicitly (never at upload time). GET lists persisted facts.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.repositories import get_document_bundle, list_facts_for_document
@@ -20,13 +20,32 @@ router = APIRouter(prefix="/documents", tags=["facts"])
 
 @router.post("/{document_id}/facts", response_model=FactExtractionReport)
 def trigger_fact_extraction(
-    document_id: UUID, db: Session = Depends(get_db)
+    document_id: UUID,
+    start_page: int | None = Query(
+        default=None, ge=0, description="0-based first pdf page (inclusive)"
+    ),
+    end_page: int | None = Query(
+        default=None, ge=0, description="0-based last pdf page (inclusive)"
+    ),
+    db: Session = Depends(get_db),
 ) -> FactExtractionReport:
+    """Run evidence-scoped LLM extraction, optionally over a page window.
+
+    Without page parameters the whole document is processed; with them
+    only chunks on ``start_page..end_page`` run. Progress commits per
+    chunk, so reruns skip already-completed chunks without duplicating
+    facts.
+    """
     if get_document_bundle(db, document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     try:
-        report = extract_facts_for_document(db, document_id)
+        report = extract_facts_for_document(
+            db, document_id, start_page=start_page, end_page=end_page
+        )
         db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
         raise HTTPException(

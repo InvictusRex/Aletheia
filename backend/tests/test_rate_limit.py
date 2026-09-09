@@ -350,7 +350,7 @@ def test_provider_uses_deterministic_conservative_params(monkeypatch):
     assert state["calls"] == 1
     kwargs = state["kwargs"][0]
     assert kwargs["temperature"] == EXTRACTION_TEMPERATURE == 0
-    assert kwargs["max_tokens"] == EXTRACTION_MAX_OUTPUT_TOKENS == 2000
+    assert kwargs["max_tokens"] == EXTRACTION_MAX_OUTPUT_TOKENS
 
 
 # ---------------------------------------------------------------------------

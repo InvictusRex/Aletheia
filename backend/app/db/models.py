@@ -180,7 +180,6 @@ class FactEmbeddingRow(Base):
         Vector(384).with_variant(JSON, "sqlite"), nullable=False
     )
 
-
 class RelationshipRow(Base):
     """Persisted fact-pair relationship (enums stored as plain strings)."""
 
@@ -205,3 +204,34 @@ class RelationshipRow(Base):
         JSON, nullable=False, default=dict
     )
     status: Mapped[str] = mapped_column(String, nullable=False, default="RESOLVED")
+
+
+class ExtractionChunkRow(Base):
+    """Per-chunk fact-extraction progress (resume support).
+
+    One row per (document, pdf page, chunk index within the page).
+    ``chunk_index`` is the chunk's ordinal among that page's chunks as
+    built by ``app.facts.chunking.build_chunks`` — deterministic for a
+    given chunking bound. ``COMPLETED`` chunks are skipped on rerun
+    (their ``fact_ids`` rehydrate reports without new Groq calls);
+    ``FAILED`` chunks never invalidate completed ones. Absent row means
+    pending. ``evidence_hash`` guards against stale skips when the
+    chunking bound changed between runs.
+    """
+
+    __tablename__ = "extraction_chunks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "pdf_page_number", "chunk_index"),
+        Index("ix_extraction_chunks_document_id", "document_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    document_id: Mapped[UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    pdf_page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fact_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    evidence_hash: Mapped[str] = mapped_column(String, nullable=False, default="")

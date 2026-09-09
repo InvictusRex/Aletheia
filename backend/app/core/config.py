@@ -27,8 +27,10 @@ class Settings(BaseSettings):
     groq_api_key: str = Field(default="")
     groq_model: str = Field(default="openai/gpt-oss-120b")
 
-    # Fact extraction bounds (evidence-scoped LLM calls only).
-    fact_chunk_max_chars: int = Field(default=6000)
+    # Fact extraction bounds (evidence-scoped LLM calls only). The chunk
+    # bound keeps normal requests near ~1.5-2K total tokens against the
+    # 8K TPM tier: one bounded chunk per serial request, no packing.
+    fact_chunk_max_chars: int = Field(default=2500)
     fact_llm_timeout_s: int = Field(default=60)
 
     # Groq request management (free-tier aware). Kept explicit and

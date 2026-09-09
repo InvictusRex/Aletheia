@@ -176,7 +176,7 @@ def build_chunks(
     document_id: UUID,
     pages: list[Page],
     evidence: list[EvidenceUnit],
-    max_chars: int = 6000,
+    max_chars: int = 2500,
 ) -> list[EvidenceChunk]:
     """Group evidence into page-scoped extraction chunks (pure function).
 

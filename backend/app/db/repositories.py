@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import DocumentRow, EvidenceUnitRow, PageRow
+from app.db.models import ExtractionChunkRow
 from app.models import Document, EvidenceUnit, Page
 
 
@@ -658,3 +659,57 @@ def nearest_fact_ids_by_vector(
     ]
     scored.sort(key=lambda item: (item[1], str(item[0])))
     return scored[:limit]
+
+
+def get_chunk_statuses(
+    session: Session, document_id: UUID
+) -> dict[tuple[int, int], ExtractionChunkRow]:
+    """Load extraction progress rows keyed by ``(pdf_page_number, chunk_index)``.
+
+    Absent key means the chunk is pending. Read-only.
+    """
+    rows = list(
+        session.scalars(
+            select(ExtractionChunkRow).where(
+                ExtractionChunkRow.document_id == document_id
+            )
+        ).all()
+    )
+    return {(r.pdf_page_number, r.chunk_index): r for r in rows}
+
+
+def upsert_chunk_status(
+    session: Session,
+    document_id: UUID,
+    pdf_page_number: int,
+    chunk_index: int,
+    status: str,
+    error: str | None,
+    fact_ids: list[UUID],
+    evidence_hash: str,
+) -> None:
+    """Insert or replace one chunk progress row; single flush, caller commits."""
+    row = session.scalars(
+        select(ExtractionChunkRow).where(
+            ExtractionChunkRow.document_id == document_id,
+            ExtractionChunkRow.pdf_page_number == pdf_page_number,
+            ExtractionChunkRow.chunk_index == chunk_index,
+        )
+    ).first()
+    if row is None:
+        row = ExtractionChunkRow(
+            document_id=document_id,
+            pdf_page_number=pdf_page_number,
+            chunk_index=chunk_index,
+            status=status,
+            error=error,
+            fact_ids=[str(fid) for fid in fact_ids],
+            evidence_hash=evidence_hash,
+        )
+        session.add(row)
+    else:
+        row.status = status
+        row.error = error
+        row.fact_ids = [str(fid) for fid in fact_ids]
+        row.evidence_hash = evidence_hash
+    session.flush()

@@ -11,7 +11,7 @@ Operational contract:
 - Minimum 2.5s between request starts via the shared
   :class:`RateLimiter` (pure interval pacing, no token scheduling).
 - Deterministic generation: ``temperature=0``.
-- Conservative output: ``max_tokens=2000`` hard cap; the prompt asks
+- Conservative output: ``max_tokens=1200`` hard cap; the prompt asks
   for concise structured facts only, so real output is far smaller.
 - Plain JSON output + local Pydantic validation (no provider-side
   strict-schema machinery). Model text is cleaned (markdown fences,
@@ -70,9 +70,10 @@ DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 #: Deterministic generation for fact extraction.
 EXTRACTION_TEMPERATURE = 0.0
 
-#: Hard output cap. Prompts normally produce far less; input + output
-#: both count toward the provider TPM limit, so this stays conservative.
-EXTRACTION_MAX_OUTPUT_TOKENS = 2000
+#: Hard output cap. Prompts normally produce far less (a few concise
+#: drafts of ~150 tokens each); input + output both count toward the
+#: provider TPM limit, so this stays conservative.
+EXTRACTION_MAX_OUTPUT_TOKENS = 1200
 
 logger = logging.getLogger(__name__)
 
