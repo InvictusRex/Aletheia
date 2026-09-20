@@ -555,3 +555,60 @@ def test_normalize_document_facts_report_shape(db_session):
     assert report.facts_processed == 1
     assert report.facts_normalized >= 1
     assert report.errors == []
+
+
+def test_normalize_fact_is_idempotent_for_norm_flags():
+    fact = _fact(unit="km", value_text="5 km", value_number=5.0)
+
+    first = normalize_fact(fact)
+    second = normalize_fact(first)
+    third = normalize_fact(second)
+
+    assert first.ambiguity_flags == ["norm:unit_unknown:km"]
+    assert second.ambiguity_flags == first.ambiguity_flags
+    assert third.ambiguity_flags == first.ambiguity_flags
+
+
+def test_normalize_fact_preserves_validator_flags_and_replaces_norm_flags():
+    fact = _fact(
+        unit="km",
+        value_text="5 km",
+        value_number=5.0,
+        ambiguity_flags=["llm_flagged_ambiguous", "norm:stale_flag_from_old_rule"],
+    )
+
+    updated = normalize_fact(fact)
+
+    assert updated.ambiguity_flags == [
+        "llm_flagged_ambiguous",
+        "norm:unit_unknown:km",
+    ]
+
+
+def test_normalize_document_facts_rerun_does_not_grow_flags(db_session):
+    document, _, evidence = _ingest(
+        db_session,
+        "synthetic-rerun.pdf",
+        _make_text_pdf(["Synthetic probe sentence with neutral wording. " * 25]),
+    )
+    fact = _fact(
+        document_id=document.id,
+        evidence_ids=[evidence[0].id],
+        unit="km",
+        value_text="5 km",
+        value_number=5.0,
+    )
+    save_facts(db_session, [fact])
+    db_session.commit()
+
+    normalize_document_facts(db_session, str(document.id))
+    db_session.commit()
+    after_first = list_facts_for_document(db_session, document.id)[0].ambiguity_flags
+
+    second = normalize_document_facts(db_session, str(document.id))
+    db_session.commit()
+    after_second = list_facts_for_document(db_session, document.id)[0].ambiguity_flags
+
+    assert after_first == ["norm:unit_unknown:km"]
+    assert after_second == after_first
+    assert second.facts_flagged == 1

@@ -4,7 +4,13 @@
 
 - ``normalized_number`` / ``normalized_unit`` (canonical scale + unit),
 - ``canonical_subject`` / ``canonical_predicate`` (generic name cleanup),
-- ``ambiguity_flags`` (append-only ``norm:`` flags; never invented values).
+- ``ambiguity_flags`` (``norm:`` flags recomputed from scratch; never
+  invented values).
+
+Idempotent by construction: each run REPLACES the ``norm:`` flags it owns
+rather than appending to them, so normalizing an already-normalized fact
+is a no-op and a changed rule cannot leave a stale flag behind. Flags
+owned by the validator (no ``norm:`` prefix) are preserved verbatim.
 
 Raw fields, ``evidence_ids``, ``extraction_confidence`` and ``status`` are
 NEVER touched. Unknown units/scales yield ``None`` plus a ``norm:`` flag.
@@ -537,6 +543,26 @@ def _canonical_name(text: str | None) -> str | None:
     return cleaned or None
 
 
+NORM_FLAG_PREFIX = "norm:"
+
+
+def _replace_norm_flags(
+    existing: list[str] | None, fresh: list[str]
+) -> list[str]:
+    """Drop the flags this module owns, then append the freshly computed ones.
+
+    Keeps validator-owned flags in their original order and positions
+    ``norm:`` flags last. Re-running normalization therefore converges
+    instead of growing the list on every pass.
+    """
+    preserved = [
+        flag
+        for flag in (existing or [])
+        if not str(flag).startswith(NORM_FLAG_PREFIX)
+    ]
+    return preserved + fresh
+
+
 def normalize_fact(fact: Fact) -> Fact:
     """Return a copy of ``fact`` with ONLY the five reserved fields changed.
 
@@ -562,7 +588,7 @@ def normalize_fact(fact: Fact) -> Fact:
     updated.normalized_unit = normalized_unit
     updated.canonical_subject = _canonical_name(fact.subject)
     updated.canonical_predicate = _canonical_name(fact.predicate)
-    updated.ambiguity_flags = list(fact.ambiguity_flags or []) + new_flags
+    updated.ambiguity_flags = _replace_norm_flags(fact.ambiguity_flags, new_flags)
     return updated
 
 
