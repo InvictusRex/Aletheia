@@ -190,6 +190,7 @@ def _chat_once(
     prompt: str,
     temperature: float,
     num_predict: int,
+    num_ctx: int | None,
     think: bool | None,
     keep_alive: int | None,
     timeout_s: int,
@@ -215,6 +216,12 @@ def _chat_once(
         "format": "json",
         "options": {"temperature": temperature, "num_predict": num_predict},
     }
+    if num_ctx is not None:
+        # Ollama silently truncates to its own small default context
+        # unless num_ctx is sent, so chunk sizing must be mirrored here
+        # or oversized prompts lose their tail and the model emits
+        # unparseable JSON.
+        body["options"]["num_ctx"] = num_ctx
     if think is not None:
         body["think"] = think
     if keep_alive is not None:
@@ -311,6 +318,7 @@ class OllamaFactsProvider:
         backoff_max_s: float = 30.0,
         max_output_tokens: int = OLLAMA_MAX_OUTPUT_TOKENS,
         keep_alive: int | None = -1,
+        context_tokens: int | None = None,
     ) -> None:
         self._base_url = (base_url or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
         self._model = model
@@ -321,6 +329,9 @@ class OllamaFactsProvider:
         self._backoff_base_s = max(0.0, float(backoff_base_s))
         self._backoff_max_s = max(0.0, float(backoff_max_s))
         self._max_output_tokens = max(1, int(max_output_tokens))
+        self._context_tokens = (
+            max(1, int(context_tokens)) if context_tokens else None
+        )
 
     @property
     def model_name(self) -> str:
@@ -365,6 +376,7 @@ class OllamaFactsProvider:
                     prompt=prompt,
                     temperature=OLLAMA_TEMPERATURE,
                     num_predict=self._max_output_tokens,
+                    num_ctx=self._context_tokens,
                     think=self._think,
                     keep_alive=self._keep_alive,
                     timeout_s=self._timeout_s,
@@ -412,6 +424,7 @@ class OllamaJudgmentTransport:
         backoff_base_s: float = 1.0,
         backoff_max_s: float = 30.0,
         keep_alive: int | None = -1,
+        context_tokens: int | None = None,
     ) -> None:
         self._base_url = (base_url or DEFAULT_OLLAMA_BASE_URL).rstrip("/")
         self._model = model
@@ -421,6 +434,9 @@ class OllamaJudgmentTransport:
         self._keep_alive = keep_alive
         self._backoff_base_s = max(0.0, float(backoff_base_s))
         self._backoff_max_s = max(0.0, float(backoff_max_s))
+        self._context_tokens = (
+            max(1, int(context_tokens)) if context_tokens else None
+        )
 
     @property
     def model_name(self) -> str:
@@ -461,6 +477,7 @@ class OllamaJudgmentTransport:
                     prompt=prompt,
                     temperature=OLLAMA_TEMPERATURE,
                     num_predict=OLLAMA_JUDGMENT_MAX_TOKENS,
+                    num_ctx=self._context_tokens,
                     think=self._think,
                     keep_alive=self._keep_alive,
                     timeout_s=self._timeout_s,

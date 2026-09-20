@@ -886,10 +886,14 @@ def test_selection_prefers_table_then_numeric():
     assert [c.pdf_page_number for c in picked] == [1, 3]
 
 
-def test_default_cap_is_unlimited():
+def test_default_cap_is_bounded():
+    """Exhaustive extraction is thousands of serial requests, so the
+    default samples representative chunks instead of every chunk."""
     from app.core.config import Settings
 
-    assert Settings().fact_max_chunks_per_document is None
+    cap = Settings().fact_max_chunks_per_document
+    assert cap is not None
+    assert cap >= 1
 
 
 def test_service_caps_llm_calls_per_run(db_session, monkeypatch):
@@ -1149,8 +1153,11 @@ def test_evidence_budget_formula(db_session, monkeypatch):
 def test_reserved_output_default_leaves_output_headroom():
     from app.core.config import Settings
 
-    assert Settings().extraction_reserved_output_tokens == 1600
-    assert Settings().extraction_reserved_output_tokens > 1200
+    reserved = Settings().extraction_reserved_output_tokens
+    # Enough headroom for a full drafts array, and still small enough
+    # that the evidence budget stays the larger share of the context.
+    assert reserved > 1200
+    assert reserved < Settings().llm_context_tokens // 2
 
 
 def test_factory_caps_provider_output_at_reserved(monkeypatch):

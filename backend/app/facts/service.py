@@ -87,6 +87,7 @@ def get_llm_provider() -> LLMProvider | None:
             backoff_max_s=settings.ollama_backoff_max_s,
             keep_alive=settings.ollama_keep_alive,
             max_output_tokens=settings.extraction_reserved_output_tokens,
+            context_tokens=settings.llm_context_tokens,
         )
     raise ValueError(
         f"unknown LLM_PROVIDER {settings.llm_provider!r}: "

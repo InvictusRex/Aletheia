@@ -42,13 +42,21 @@ class Settings(BaseSettings):
     # Fact extraction bounds (evidence-scoped LLM calls only). The chunk
     # bound keeps normal requests near ~1.5-2K total tokens against the
     # 8K TPM tier: one bounded chunk per serial request, no packing.
-    fact_chunk_max_chars: int = Field(default=2500)
+    fact_chunk_max_chars: int = Field(default=8000)
     # Operability bound: limits extraction to representative chunks when
-    # set; None processes all eligible chunks.
-    fact_max_chunks_per_document: int | None = Field(default=None)
+    # set; None processes all eligible chunks. Bounded by default because
+    # exhaustive extraction over a 100-page report is thousands of serial
+    # requests; select_representative_chunks spreads the sample across
+    # the document and prefers table/numeric-dense content.
+    fact_max_chunks_per_document: int | None = Field(default=60)
     fact_llm_timeout_s: int = Field(default=60)
-    llm_context_tokens: int = Field(default=4096)
-    extraction_reserved_output_tokens: int = Field(default=1600)
+    # Model context window. This drives BOTH chunk sizing and the num_ctx
+    # sent to Ollama -- a server that is not told num_ctx silently
+    # truncates to its own small default and the model then emits
+    # unparseable JSON. Raise both this and fact_chunk_max_chars together:
+    # whichever is smaller binds.
+    llm_context_tokens: int = Field(default=16384)
+    extraction_reserved_output_tokens: int = Field(default=4096)
     extraction_safety_margin_tokens: int = Field(default=200)
 
     # Groq request management (free-tier aware). Kept explicit and

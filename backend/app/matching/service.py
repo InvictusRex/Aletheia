@@ -99,6 +99,7 @@ def get_judgment_transport() -> GroqJudgmentTransport | OllamaJudgmentTransport 
             backoff_base_s=settings.ollama_backoff_base_s,
             backoff_max_s=settings.ollama_backoff_max_s,
             keep_alive=settings.ollama_keep_alive,
+            context_tokens=settings.llm_context_tokens,
         )
     raise ValueError(
         f"unknown LLM_PROVIDER {settings.llm_provider!r}: "

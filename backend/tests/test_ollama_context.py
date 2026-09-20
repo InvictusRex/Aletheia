@@ -95,3 +95,49 @@ def test_plain_500_still_retries(monkeypatch):
         provider.extract_facts("extract facts about X")
     assert len(state["posts"]) == 3
     assert "context" not in str(excinfo.value).lower()
+
+
+class _OkResponse:
+    status_code = 200
+    text = ""
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"message": {"content": '{"drafts": []}'}}
+
+
+def test_num_ctx_is_sent_so_ollama_does_not_truncate(monkeypatch):
+    """Ollama defaults to its own small context unless num_ctx is sent.
+
+    Without this the server silently drops the tail of an oversized
+    prompt and the model returns unparseable JSON.
+    """
+    state = _install(monkeypatch, _OkResponse())
+    provider = OllamaFactsProvider(model="m", context_tokens=16384)
+    provider.extract_facts("prompt")
+
+    options = state["posts"][0]["json"]["options"]
+    assert options["num_ctx"] == 16384
+
+
+def test_num_ctx_omitted_when_not_configured(monkeypatch):
+    state = _install(monkeypatch, _OkResponse())
+    provider = OllamaFactsProvider(model="m")
+    provider.extract_facts("prompt")
+
+    assert "num_ctx" not in state["posts"][0]["json"]["options"]
+
+
+def test_judgment_transport_also_sends_num_ctx(monkeypatch):
+    from app.llm.ollama import OllamaJudgmentTransport
+
+    class _JudgeResponse(_OkResponse):
+        def json(self):
+            return {"message": {"content": "verdict"}}
+
+    state = _install(monkeypatch, _JudgeResponse())
+    OllamaJudgmentTransport(model="m", context_tokens=8192).complete_text("p")
+
+    assert state["posts"][0]["json"]["options"]["num_ctx"] == 8192
