@@ -112,6 +112,32 @@ def is_context_overflow(exc: BaseException) -> bool:
         return False
 
 
+def _sleep_backoff(
+    retry_number: int,
+    exc: BaseException,
+    max_retries: int,
+    base_s: float,
+    max_s: float,
+) -> None:
+    """Log one retry and sleep its backoff delay.
+
+    Shared by the facts provider and the judgment transport so both
+    retry loops pace identically.
+    """
+    delay = compute_backoff_delay(
+        attempt=retry_number, base_s=base_s, max_s=max_s
+    )
+    logger.info(
+        "Ollama retry %d/%d after %.1fs (%s): %s",
+        retry_number,
+        max_retries,
+        delay,
+        type(exc).__name__,
+        str(exc)[:200],
+    )
+    time.sleep(delay)
+
+
 class _FatalTransport(LLMTransportError):
     """Internal: transport failure that must NOT be retried.
 
@@ -320,20 +346,13 @@ class OllamaFactsProvider:
             raise ValueError("prompt must be a non-empty string")
 
         def _backoff(retry_number: int, exc: BaseException) -> None:
-            delay = compute_backoff_delay(
-                attempt=retry_number,
-                base_s=self._backoff_base_s,
-                max_s=self._backoff_max_s,
-            )
-            logger.info(
-                "Ollama retry %d/%d after %.1fs (%s): %s",
+            _sleep_backoff(
                 retry_number,
+                exc,
                 self._max_retries,
-                delay,
-                type(exc).__name__,
-                str(exc)[:200],
+                self._backoff_base_s,
+                self._backoff_max_s,
             )
-            time.sleep(delay)
 
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):
@@ -423,20 +442,13 @@ class OllamaJudgmentTransport:
             raise ValueError("prompt must be a non-empty string")
 
         def _backoff(retry_number: int, exc: BaseException) -> None:
-            delay = compute_backoff_delay(
-                attempt=retry_number,
-                base_s=self._backoff_base_s,
-                max_s=self._backoff_max_s,
-            )
-            logger.info(
-                "Ollama retry %d/%d after %.1fs (%s): %s",
+            _sleep_backoff(
                 retry_number,
+                exc,
                 self._max_retries,
-                delay,
-                type(exc).__name__,
-                str(exc)[:200],
+                self._backoff_base_s,
+                self._backoff_max_s,
             )
-            time.sleep(delay)
 
         attempts = self._max_retries + 1
         for attempt in range(1, attempts + 1):

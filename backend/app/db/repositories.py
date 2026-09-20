@@ -20,24 +20,14 @@ from app.db.models import (
 from app.models import Document, EvidenceUnit, Fact, Page, Relationship
 
 
-def _status_str(document: Document) -> str:
-    status = document.ingestion_status
-    return status.value if hasattr(status, "value") else str(status)
+def _enum_str(value: object) -> str:
+    """Unwrap an enum member to its stored string; pass anything else through.
 
-
-def _verdict_str(page: Page) -> str:
-    verdict = page.quality_verdict
-    return verdict.value if hasattr(verdict, "value") else str(verdict)
-
-
-def _evidence_type_str(evidence: EvidenceUnit) -> str:
-    value = evidence.type
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _method_str(evidence: EvidenceUnit) -> str:
-    value = evidence.extraction_method
-    return value.value if hasattr(value, "value") else str(value)
+    ORM rows store enums as plain strings, so every persistence site funnels
+    its enum-valued field through here. Tolerates already-unwrapped strings
+    because callers may hold either form.
+    """
+    return value.value if hasattr(value, "value") else str(value)  # type: ignore[attr-defined]
 
 
 def save_ingestion(
@@ -57,7 +47,7 @@ def save_ingestion(
         source=document.source,
         page_count=document.page_count,
         file_sha256=document.file_sha256,
-        ingestion_status=_status_str(document),
+        ingestion_status=_enum_str(document.ingestion_status),
         error=document.error,
         created_at=document.created_at,
     )
@@ -74,7 +64,7 @@ def save_ingestion(
             suspicious_ratio=p.suspicious_ratio,
             extraction_quality=p.extraction_quality,
             has_images=p.has_images,
-            quality_verdict=_verdict_str(p),
+            quality_verdict=_enum_str(p.quality_verdict),
             error=p.error,
         )
         for p in pages
@@ -85,10 +75,10 @@ def save_ingestion(
             document_id=e.document_id,
             pdf_page_number=e.pdf_page_number,
             source_page_number=e.source_page_number,
-            type=_evidence_type_str(e),
+            type=_enum_str(e.type),
             text=e.text,
             bbox=list(e.bbox) if e.bbox is not None else None,
-            extraction_method=_method_str(e),
+            extraction_method=_enum_str(e.extraction_method),
             extraction_quality=e.extraction_quality,
             meta=dict(e.meta) if e.meta is not None else {},
         )
@@ -203,26 +193,6 @@ def list_documents(session: Session) -> list[Document]:
     ]
 
 
-def _value_kind_str(fact: Fact) -> str:
-    value = fact.value_kind
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _time_kind_str(fact: Fact) -> str:
-    value = fact.time_kind
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _estimate_status_str(fact: Fact) -> str:
-    value = fact.estimate_status
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _fact_status_str(fact: Fact) -> str:
-    value = fact.status
-    return value.value if hasattr(value, "value") else str(value)
-
-
 def _fact_from_row(row: FactRow, evidence_ids: list[UUID]) -> Fact:
     """Rebuild a :class:`Fact` from a row plus its ordered evidence ids."""
     return Fact(
@@ -273,25 +243,25 @@ def save_facts(session: Session, facts: list[Fact]) -> None:
             canonical_subject=f.canonical_subject,
             predicate=f.predicate,
             canonical_predicate=f.canonical_predicate,
-            value_kind=_value_kind_str(f),
+            value_kind=_enum_str(f.value_kind),
             value_text=f.value_text,
             value_number=f.value_number,
             unit=f.unit,
             normalized_number=f.normalized_number,
             normalized_unit=f.normalized_unit,
             time_text=f.time_text,
-            time_kind=_time_kind_str(f),
+            time_kind=_enum_str(f.time_kind),
             time_start=f.time_start,
             time_end=f.time_end,
             scope_text=f.scope_text,
-            estimate_status=_estimate_status_str(f),
+            estimate_status=_enum_str(f.estimate_status),
             geography=f.geography,
             context=dict(f.context) if f.context is not None else {},
             extraction_confidence=f.extraction_confidence,
             ambiguity_flags=list(f.ambiguity_flags)
             if f.ambiguity_flags is not None
             else [],
-            status=_fact_status_str(f),
+            status=_enum_str(f.status),
         )
         for f in facts
     ]
@@ -364,24 +334,6 @@ def update_fact_normalization(session: Session, fact: Fact) -> bool:
     row.ambiguity_flags = list(fact.ambiguity_flags)
     session.flush()
     return True
-
-
-def _rel_type_str(rel: Relationship) -> str:
-    value = rel.relationship_type
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _rel_status_str(rel: Relationship) -> str:
-    value = rel.status
-    return value.value if hasattr(value, "value") else str(value)
-
-
-def _rel_type_filter_str(relationship_type: str | object) -> str:
-    return (
-        relationship_type.value  # type: ignore[union-attr]
-        if hasattr(relationship_type, "value")
-        else str(relationship_type)
-    )
 
 
 def _ordered_pair(a: UUID, b: UUID) -> tuple[UUID, UUID]:
@@ -459,13 +411,13 @@ def save_relationship(session: Session, rel: Relationship) -> None:
             id=rel.id,
             fact_a_id=fact_a_id,
             fact_b_id=fact_b_id,
-            relationship_type=_rel_type_str(rel),
+            relationship_type=_enum_str(rel.relationship_type),
             confidence=rel.confidence,
             explanation=rel.explanation,
             reasoning_metadata=dict(rel.reasoning_metadata)
             if rel.reasoning_metadata is not None
             else {},
-            status=_rel_status_str(rel),
+            status=_enum_str(rel.status),
         )
     )
     session.flush()
@@ -505,7 +457,7 @@ def list_relationships_for_document(
     if relationship_type is not None:
         stmt = stmt.where(
             RelationshipRow.relationship_type
-            == _rel_type_filter_str(relationship_type)
+            == _enum_str(relationship_type)
         )
     if min_confidence:
         stmt = stmt.where(RelationshipRow.confidence >= min_confidence)
