@@ -11,7 +11,10 @@ Requirements: Python 3.12, Docker + Docker Compose.
 # 1. Configure environment
 Copy-Item .env.example .env
 
-# 2. Start PostgreSQL + pgvector and the API
+# 2. Start PostgreSQL + pgvector, the ML service, the API and the UI.
+# Compose waits for the database healthcheck, then the backend applies
+# Alembic migrations before serving: no manual migration step is needed,
+# and it is a no-op against an already-migrated volume.
 docker compose up --build
 
 # 3. Health check (app vs dependency health are distinguished)
@@ -39,7 +42,8 @@ py -V:3.12 -m pytest backend/tests -v
 - `POST /documents` — upload a PDF (multipart `file`, ≤50 MB); synchronously extracts pages/evidence and persists the bundle. Returns 201 with the document, page/evidence counts, and `ingestion_status` (`COMPLETED`/`PARTIAL`/`FAILED`). Non-PDF uploads are rejected with 400.
 - `GET /documents/{id}` — inspect a document with its pages (quality verdicts) and evidence units (text, bbox, provenance).
 
-Apply database migrations (PostgreSQL reachable via `DATABASE_URL`):
+Apply database migrations manually. Only the non-Docker local run needs
+this — under Compose the backend already migrates on startup:
 
 ```powershell
 alembic -c backend/alembic.ini upgrade head

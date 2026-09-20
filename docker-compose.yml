@@ -9,6 +9,16 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # The backend runs Alembic at startup, so it must not connect before
+    # PostgreSQL accepts connections.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-aletheia} -d ${POSTGRES_DB:-aletheia}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   backend:
     build:
@@ -34,7 +44,8 @@ services:
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     # Lets host.docker.internal resolve on Linux Docker too (no-op on
     # Docker Desktop, where it already resolves to the host).
     extra_hosts:

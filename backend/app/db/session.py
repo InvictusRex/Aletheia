@@ -11,7 +11,16 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+#: Seconds libpq waits for the TCP connect before giving up. A statement
+#: timeout cannot bound this — it only applies once a connection exists —
+#: so without it an unreachable host hangs the health probe indefinitely.
+CONNECT_TIMEOUT_S = 2
+
+engine = create_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": CONNECT_TIMEOUT_S},
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -27,8 +36,9 @@ def get_db():
 def check_database_connection(timeout_seconds: int = 2) -> tuple[bool, str]:
     """Return ``(reachable, detail)`` without raising.
 
-    Uses a short statement timeout so health checks fail fast when the
-    database is unavailable instead of hanging startup/readiness probes.
+    Fails fast on two different stalls: ``CONNECT_TIMEOUT_S`` bounds an
+    unreachable host at the TCP level, and the statement timeout bounds a
+    host that accepts the connection but never answers.
     """
     try:
         with engine.connect() as connection:
