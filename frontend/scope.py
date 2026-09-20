@@ -84,3 +84,52 @@ def normalization_summary(facts: list[dict]) -> dict:
     total = len(facts)
     normalized = sum(1 for f in facts if _is_normalized_fact(f))
     return {"total": total, "normalized": normalized}
+
+
+def normalize_blocked(has_documents: bool, fact_total: int | None) -> bool:
+    return not has_documents or fact_total == 0
+
+
+def unnormalized_documents(stats: list[dict]) -> list[str]:
+    """Names of in-scope documents holding facts of which none are normalized.
+
+    Checked per document, not over the scope total: one normalized
+    document must not mask an unnormalized one, because relationship
+    typing compares normalized values and would silently skip every pair
+    drawn from the unnormalized side. Unknown counts are not treated as
+    unnormalized.
+    """
+    pending: list[str] = []
+    for entry in stats:
+        facts = entry.get("facts")
+        normalized = entry.get("normalized")
+        if facts is None or normalized is None:
+            continue
+        if facts > 0 and normalized == 0:
+            pending.append(str(entry.get("name") or "—"))
+    return pending
+
+
+def relationships_blocked(
+    has_documents: bool, fact_total: int | None, unnormalized: list[str]
+) -> bool:
+    if normalize_blocked(has_documents, fact_total):
+        return True
+    return bool(unnormalized)
+
+
+def relationship_block_reason(
+    has_documents: bool, fact_total: int | None, unnormalized: list[str]
+) -> str | None:
+    if not has_documents:
+        return None
+    if fact_total == 0:
+        return "No extracted facts in scope yet."
+    if unnormalized:
+        return (
+            f"Run NORMALIZE first — {', '.join(unnormalized)} "
+            f"{'has' if len(unnormalized) == 1 else 'have'} facts but none "
+            "normalized. Relationships compare normalized values, so those "
+            "facts can never be typed."
+        )
+    return None

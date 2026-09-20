@@ -584,12 +584,36 @@ def _scope_fact_total(documents: list[dict]) -> int | None:
     return total
 
 
+def _scope_normalization_stats(documents: list[dict]) -> list[dict]:
+    """Per-document fact/normalized counts for the pipeline gates."""
+    return [
+        {
+            "name": str(doc.get("filename", "—")),
+            **_doc_stats(str(doc.get("id"))),
+        }
+        for doc in documents
+    ]
+
+
 def _render_processing(documents: list[dict], all_documents: list[dict]) -> None:
     st.markdown('<div class="section">PROCESSING</div>', unsafe_allow_html=True)
     st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
     if not documents:
         st.info("Select at least one document to enable pipeline actions.")
     fact_total = _scope_fact_total(documents) if documents else None
+    # Relationship typing runs on normalized values, so NORMALIZE is a
+    # prerequisite, not a suggestion: without it every numeric pair
+    # compares as INCOMPARABLE and nothing is ever typed.
+    unnormalized = scope_util.unnormalized_documents(
+        _scope_normalization_stats(documents) if documents else []
+    )
+    normalize_disabled = scope_util.normalize_blocked(bool(documents), fact_total)
+    relate_disabled = scope_util.relationships_blocked(
+        bool(documents), fact_total, unnormalized
+    )
+    relate_reason = scope_util.relationship_block_reason(
+        bool(documents), fact_total, unnormalized
+    )
     col_e, col_n, col_r = st.columns(3)
     with col_e:
         if st.button("EXTRACT FACTS", key="pipe_extract", type="primary",
@@ -597,21 +621,20 @@ def _render_processing(documents: list[dict], all_documents: list[dict]) -> None
             _run_extract(documents)
             st.rerun()
     with col_n:
-        extract_disabled = not documents or fact_total == 0
         if st.button("NORMALIZE", key="pipe_normalize",
-                     use_container_width=True, disabled=extract_disabled):
+                     use_container_width=True, disabled=normalize_disabled):
             _run_normalize(documents)
             st.rerun()
-        if documents and extract_disabled:
+        if documents and normalize_disabled:
             st.caption("No extracted facts in scope yet.")
     with col_r:
         if st.button("FORM RELATIONS", key="pipe_relate_open",
-                     use_container_width=True, disabled=extract_disabled):
+                     use_container_width=True, disabled=relate_disabled):
             st.session_state.show_rel_scope = True
             st.session_state.rel_scope_ids = [str(d.get("id")) for d in documents]
             st.rerun()
-        if extract_disabled and documents:
-            st.caption("No extracted facts in scope yet.")
+        if relate_reason is not None:
+            st.caption(relate_reason)
     if st.session_state.show_rel_scope:
         with st.expander("FORM RELATIONS — select documents to compare", expanded=True):
             for doc in all_documents:

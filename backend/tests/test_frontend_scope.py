@@ -101,3 +101,62 @@ def test_normalization_summary_counts_normalized_facts():
     ]
     assert scope.normalization_summary(facts) == {"total": 5, "normalized": 4}
     assert scope.normalization_summary([]) == {"total": 0, "normalized": 0}
+
+
+
+def test_normalize_blocked_without_documents_or_facts():
+    assert scope.normalize_blocked(False, 12) is True
+    assert scope.normalize_blocked(True, 0) is True
+    assert scope.normalize_blocked(True, 12) is False
+    assert scope.normalize_blocked(True, None) is False
+
+
+def test_unnormalized_documents_flags_only_fact_bearing_documents():
+    stats = [
+        {"name": "a.pdf", "facts": 1178, "normalized": 1178},
+        {"name": "b.pdf", "facts": 1155, "normalized": 0},
+        {"name": "c.pdf", "facts": 0, "normalized": 0},
+    ]
+    assert scope.unnormalized_documents(stats) == ["b.pdf"]
+
+
+def test_unnormalized_documents_ignores_unknown_counts():
+    stats = [
+        {"name": "a.pdf", "facts": None, "normalized": None},
+        {"name": "b.pdf", "facts": 10, "normalized": None},
+    ]
+    assert scope.unnormalized_documents(stats) == []
+
+
+def test_one_normalized_document_does_not_mask_an_unnormalized_one():
+    stats = [
+        {"name": "normalized.pdf", "facts": 1178, "normalized": 1178},
+        {"name": "raw.pdf", "facts": 1155, "normalized": 0},
+    ]
+    pending = scope.unnormalized_documents(stats)
+    assert scope.relationships_blocked(True, 2333, pending) is True
+    assert "raw.pdf" in (scope.relationship_block_reason(True, 2333, pending) or "")
+
+
+def test_relationships_unblocked_once_every_document_is_normalized():
+    stats = [{"name": "a.pdf", "facts": 10, "normalized": 10}]
+    pending = scope.unnormalized_documents(stats)
+    assert pending == []
+    assert scope.relationships_blocked(True, 10, pending) is False
+    assert scope.relationship_block_reason(True, 10, pending) is None
+
+
+def test_relationships_blocked_inherits_normalize_preconditions():
+    assert scope.relationships_blocked(False, 12, []) is True
+    assert scope.relationships_blocked(True, 0, []) is True
+
+
+def test_relationship_block_reason_names_the_missing_step():
+    assert scope.relationship_block_reason(True, 0, []) == (
+        "No extracted facts in scope yet."
+    )
+    assert scope.relationship_block_reason(False, 0, []) is None
+    reason = scope.relationship_block_reason(True, 12, ["x.pdf", "y.pdf"])
+    assert "have facts but none" in reason
+    single = scope.relationship_block_reason(True, 12, ["x.pdf"])
+    assert "has facts but none" in single
