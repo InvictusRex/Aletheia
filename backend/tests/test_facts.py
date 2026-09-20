@@ -277,6 +277,33 @@ def test_parse_number(text, expected):
     assert parse_number(text) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("-1.2", -1.2),
+        ("-14.5%", -14.5),
+        ("-8.1", -8.1),
+        ("-0.5", -0.5),
+        ("-2,500 Cr", -25000000000.0),
+        ("-1.5 Mn", -1500000.0),
+        ("₹-5", -5.0),
+        ("-₹5", -5.0),
+        ("(₹5)", -5.0),
+        ("+3.4", 3.4),
+        ("--3", 3.0),
+        ("-", None),
+    ],
+)
+def test_parse_number_preserves_sign(text, expected):
+    """A dropped minus turns a contraction into an expansion.
+
+    The sign may sit on either side of a currency symbol, and dropping
+    it silently corrupts every downstream comparison: -14.5% and +14.5%
+    would compare as identical.
+    """
+    assert parse_number(text) == expected
+
+
 # ---------------------------------------------------------------------------
 # 3. parse_time
 # ---------------------------------------------------------------------------

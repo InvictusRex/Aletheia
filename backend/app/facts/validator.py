@@ -76,11 +76,25 @@ def parse_number(text: str) -> float | None:
     if s.startswith("(") and s.endswith(")"):
         negative = True
         s = s[1:-1]
+
+    def take_sign(text: str) -> str:
+        # A sign may sit on either side of a currency symbol ("-₹5" and
+        # "₹-5" are both written), so this runs before and after the
+        # prefix strip. Never discard it: dropping a minus turns a
+        # contraction into an expansion and a deficit into a surplus.
+        nonlocal negative
+        while text[:1] in ("+", "-"):
+            if text[0] == "-":
+                negative = not negative
+            text = text[1:]
+        return text
+
+    s = take_sign(s)
     for prefix in _CURRENCY_PREFIXES:
         if s.startswith(prefix):
             s = s[len(prefix):]
             break
-    s = s.lstrip("+-")
+    s = take_sign(s)
     multiplier = 1.0
     for suffix, factor in _NUMBER_SUFFIXES:
         if s.endswith(suffix):
