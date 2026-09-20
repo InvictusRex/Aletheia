@@ -564,10 +564,11 @@ def _run_normalize(documents: list[dict]) -> None:
 
 
 def _run_relationships(documents: list[dict]) -> None:
+    scope_ids = [str(d.get("id")) for d in documents]
     for doc in documents:
         doc_id = str(doc.get("id"))
         with st.spinner(f"Finding relationships for {doc.get('filename', doc_id[:8])} ..."):
-            report, err = api_client.trigger_relationships(doc_id)
+            report, err = api_client.trigger_relationships(doc_id, scope_ids)
         _pipeline_reports(doc_id)["relationships"] = {"report": report, "error": err}
     _refresh_doc_stats([str(d.get("id")) for d in documents])
     st.session_state.search_cache = {}

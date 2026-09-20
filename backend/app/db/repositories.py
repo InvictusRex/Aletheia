@@ -423,6 +423,33 @@ def save_relationship(session: Session, rel: Relationship) -> None:
     session.flush()
 
 
+def replace_relationship(session: Session, rel: Relationship) -> bool:
+    """Overwrite a stored pair's verdict in place, keeping its row id.
+
+    Returns True when an existing row was updated, False when the pair
+    was not stored. Used only by an explicit recompute: a stored
+    judgment is never silently rewritten by an ordinary run.
+    """
+    fact_a_id, fact_b_id = _ordered_pair(rel.fact_a_id, rel.fact_b_id)
+    row = session.scalars(
+        select(RelationshipRow).where(
+            RelationshipRow.fact_a_id == fact_a_id,
+            RelationshipRow.fact_b_id == fact_b_id,
+        )
+    ).first()
+    if row is None:
+        return False
+    row.relationship_type = _enum_str(rel.relationship_type)
+    row.confidence = rel.confidence
+    row.explanation = rel.explanation
+    row.reasoning_metadata = (
+        dict(rel.reasoning_metadata) if rel.reasoning_metadata is not None else {}
+    )
+    row.status = _enum_str(rel.status)
+    session.flush()
+    return True
+
+
 def relationship_exists(session: Session, a: UUID, b: UUID) -> bool:
     """Return True when a relationship row exists for the pair (any order)."""
     fact_a_id, fact_b_id = _ordered_pair(a, b)

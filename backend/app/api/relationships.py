@@ -37,12 +37,26 @@ class RelationshipDetail(BaseModel):
     "/documents/{document_id}/relationships", response_model=MatchingReport
 )
 def trigger_matching(
-    document_id: UUID, db: Session = Depends(get_db)
+    document_id: UUID,
+    db: Session = Depends(get_db),
+    compare_with: list[UUID] | None = Query(
+        default=None,
+        description="Bound the candidate side to these document ids; "
+        "omit to compare against every other document",
+    ),
+    recompute: bool = Query(
+        default=False,
+        description="Re-classify already-stored pairs and overwrite their "
+        "verdict in place; off by default so an ordinary run never "
+        "silently rewrites a stored judgment",
+    ),
 ) -> MatchingReport:
     if get_document_bundle(db, document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     try:
-        report = run_matching_for_document(db, document_id)
+        report = run_matching_for_document(
+            db, document_id, compare_with=compare_with, recompute=recompute
+        )
         db.commit()
     except Exception as exc:
         db.rollback()

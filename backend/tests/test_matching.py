@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.db.repositories import (
     get_fact,
     get_relationship,
+    list_all_facts,
     list_relationships_for_document,
     save_facts,
     save_ingestion,
@@ -1285,3 +1286,132 @@ def test_same_claim_different_values_is_contradiction():
     assert conf == 0.85
     assert meta["incompatible_dimensions"] == []
     assert needs_llm is False
+
+
+# ---------------------------------------------------------------------------
+# compare_with bounds the candidate side to the documents the user selected
+# ---------------------------------------------------------------------------
+
+
+def test_compare_with_bounds_candidates_to_selected_documents(db_session):
+    doc_a, doc_b, doc_c = uuid4(), uuid4(), uuid4()
+    save_facts(db_session, [
+        _mk_fact(doc_a, [uuid4()]),
+        _mk_fact(doc_b, [uuid4()]),
+        _mk_fact(doc_c, [uuid4()]),
+    ])
+    db_session.commit()
+
+    report = run_matching_for_document(
+        db_session,
+        str(doc_a),
+        embedder=None,
+        transport=None,
+        compare_with=[doc_b],
+    )
+    db_session.commit()
+
+    partners = set()
+    for rel in report.relationships:
+        partners.add(str(rel.fact_a_id))
+        partners.add(str(rel.fact_b_id))
+    stored = {
+        str(f.document_id)
+        for f in list_all_facts(db_session)
+        if str(f.id) in partners
+    }
+    assert stored == {str(doc_a), str(doc_b)}
+    assert str(doc_c) not in stored
+
+
+def test_compare_with_none_still_compares_against_everything(db_session):
+    doc_a, doc_b, doc_c = uuid4(), uuid4(), uuid4()
+    save_facts(db_session, [
+        _mk_fact(doc_a, [uuid4()]),
+        _mk_fact(doc_b, [uuid4()]),
+        _mk_fact(doc_c, [uuid4()]),
+    ])
+    db_session.commit()
+
+    report = run_matching_for_document(
+        db_session, str(doc_a), embedder=None, transport=None
+    )
+    db_session.commit()
+
+    partners = set()
+    for rel in report.relationships:
+        partners.add(str(rel.fact_a_id))
+        partners.add(str(rel.fact_b_id))
+    stored = {
+        str(f.document_id)
+        for f in list_all_facts(db_session)
+        if str(f.id) in partners
+    }
+    assert stored == {str(doc_a), str(doc_b), str(doc_c)}
+
+
+# ---------------------------------------------------------------------------
+# recompute: an ordinary rerun never rewrites a stored verdict; an explicit
+# recompute re-classifies in place when the underlying facts have changed
+# ---------------------------------------------------------------------------
+
+
+def _rerun(db_session, doc_id, **kwargs):
+    report = run_matching_for_document(
+        db_session, str(doc_id), embedder=None, transport=None, **kwargs
+    )
+    db_session.commit()
+    return report
+
+
+def test_rerun_without_recompute_keeps_the_stored_verdict(db_session):
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(doc_a, [uuid4()])
+    fact_b = _mk_fact(doc_b, [uuid4()])
+    save_facts(db_session, [fact_a, fact_b])
+    db_session.commit()
+
+    first = _rerun(db_session, doc_a)
+    assert len(first.relationships) == 1
+    original = first.relationships[0]
+    assert original.relationship_type == RelationshipType.CORROBORATES
+
+    # The fact now says something materially different.
+    from app.db.repositories import update_fact_normalization
+
+    fact_b.normalized_number = -999.0
+    update_fact_normalization(db_session, fact_b)
+    db_session.commit()
+
+    second = _rerun(db_session, doc_a)
+    assert second.skipped_existing == 1
+    assert second.recomputed == 0
+    stored = list_relationships_for_document(db_session, doc_a)
+    assert stored[0].relationship_type == RelationshipType.CORROBORATES
+
+
+def test_recompute_reclassifies_in_place_and_keeps_the_row_id(db_session):
+    doc_a, doc_b = uuid4(), uuid4()
+    fact_a = _mk_fact(doc_a, [uuid4()])
+    fact_b = _mk_fact(doc_b, [uuid4()])
+    save_facts(db_session, [fact_a, fact_b])
+    db_session.commit()
+
+    first = _rerun(db_session, doc_a)
+    row_id = list_relationships_for_document(db_session, doc_a)[0].id
+    assert first.relationships[0].relationship_type == RelationshipType.CORROBORATES
+
+    from app.db.repositories import update_fact_normalization
+
+    fact_b.normalized_number = -999.0
+    update_fact_normalization(db_session, fact_b)
+    db_session.commit()
+
+    second = _rerun(db_session, doc_a, recompute=True)
+    assert second.recomputed == 1
+    assert second.skipped_existing == 0
+
+    stored = list_relationships_for_document(db_session, doc_a)
+    assert len(stored) == 1, "recompute must update in place, not duplicate"
+    assert stored[0].id == row_id
+    assert stored[0].relationship_type != RelationshipType.CORROBORATES

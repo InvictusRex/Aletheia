@@ -18,6 +18,7 @@ from app.db.repositories import (
     get_embeddings,
     list_all_facts,
     relationship_exists,
+    replace_relationship,
     save_embedding,
     save_relationship,
 )
@@ -49,6 +50,7 @@ class MatchingReport(BaseModel):
     candidates_evaluated: int = 0
     unrelated_count: int = 0
     skipped_existing: int = 0
+    recomputed: int = 0
     errors: list[str] = Field(default_factory=list)
 
 
@@ -193,9 +195,24 @@ def run_matching_for_document(
     document_id: str,
     embedder: FactEmbedder | None = None,
     transport: GroqJudgmentTransport | OllamaJudgmentTransport | None = None,
+    compare_with: list[UUID] | None = None,
+    recompute: bool = False,
 ) -> MatchingReport:
-    """Discover candidates for one document's facts and classify them."""
+    """Discover candidates for one document's facts and classify them.
+
+    ``compare_with`` bounds the candidate side to those document ids
+    (the query document is always included). ``None`` compares against
+    every other document, preserving the unbounded default.
+
+    ``recompute`` re-classifies pairs that are already stored and
+    overwrites their verdict in place. It is off by default: an ordinary
+    run never silently rewrites a stored judgment, but a stored verdict
+    computed from since-corrected facts would otherwise be permanent.
+    """
     pool = list_all_facts(session)
+    if compare_with is not None:
+        allowed = {str(d) for d in compare_with} | {str(document_id)}
+        pool = [f for f in pool if str(f.document_id) in allowed]
     doc_facts = [f for f in pool if str(f.document_id) == str(document_id)]
     report = MatchingReport(document_id=str(document_id))
     if not doc_facts:
@@ -222,7 +239,8 @@ def run_matching_for_document(
 
     for a_id, b_id, _ in candidates:
         try:
-            if relationship_exists(session, a_id, b_id):
+            already_stored = relationship_exists(session, a_id, b_id)
+            if already_stored and not recompute:
                 report.skipped_existing += 1
                 continue
             fact_a, fact_b = by_id[a_id], by_id[b_id]
@@ -276,7 +294,11 @@ def run_matching_for_document(
                 reasoning_metadata=metadata,
                 status=status,
             )
-            save_relationship(session, rel)
+            if already_stored:
+                replace_relationship(session, rel)
+                report.recomputed += 1
+            else:
+                save_relationship(session, rel)
             report.relationships.append(rel)
         except Exception as exc:
             report.errors.append(f"pair {a_id}/{b_id}: {type(exc).__name__}: {exc}")

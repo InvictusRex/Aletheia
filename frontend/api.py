@@ -8,6 +8,7 @@ returns a ``(data, error)`` tuple — ``error`` is a human-readable string or
 from __future__ import annotations
 
 import os
+from urllib.parse import quote
 
 import requests
 
@@ -212,8 +213,16 @@ def trigger_normalize(document_id: str) -> tuple[dict | None, str | None]:
     )
 
 
-def trigger_relationships(document_id: str) -> tuple[dict | None, str | None]:
-    """Run relationship reasoning; report carries relationship counts."""
-    return _post_pipeline_action(
-        f"/documents/{document_id}/relationships", _RELATIONSHIPS_TIMEOUT
-    )
+def trigger_relationships(
+    document_id: str, compare_with: list[str] | None = None
+) -> tuple[dict | None, str | None]:
+    """Run relationship reasoning; report carries relationship counts.
+
+    ``compare_with`` bounds the candidate side to the documents the user
+    actually selected, so the run persists nothing outside that scope.
+    """
+    path = f"/documents/{document_id}/relationships"
+    if compare_with:
+        query = "&".join(f"compare_with={quote(str(d))}" for d in compare_with)
+        path = f"{path}?{query}"
+    return _post_pipeline_action(path, _RELATIONSHIPS_TIMEOUT)
