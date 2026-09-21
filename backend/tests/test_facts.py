@@ -34,6 +34,7 @@ from app.db.repositories import (
 from app.extraction.pipeline import run_ingestion
 from app.facts.service import FactExtractionReport, extract_facts_for_document
 from app.facts.validator import build_fact, parse_number, parse_time, resolve_kind
+from app.models import DimensionVerdict
 from app.llm.groq import DEFAULT_GROQ_MODEL, GroqFactsProvider
 from app.llm.provider import FactExtractionBatch, LLMProvider, LLMTransportError
 from app.models import (
@@ -1255,3 +1256,95 @@ def test_word_form_percentage_resolves_to_percentage_kind():
     kind, flags = resolve_kind(draft)
     assert kind == ValueKind.PERCENTAGE
     assert any(f.startswith("kind_corrected:") for f in flags)
+
+
+@pytest.mark.parametrize(
+    ("text", "kind"),
+    [
+        ("H1 FY25", TimeKind.FISCAL_YEAR),
+        ("H1 of FY25", TimeKind.FISCAL_YEAR),
+        ("Fiscal 2021", TimeKind.FISCAL_YEAR),
+        ("2024", TimeKind.RANGE),
+        ("End-December 2024", TimeKind.UNKNOWN),
+        ("As on the date of this Prospectus", TimeKind.UNKNOWN),
+    ],
+)
+def test_parse_time_types_periods_without_inventing_boundaries(text, kind):
+    """An unparsed period reads as UNKNOWN, and UNKNOWN never blocks a
+    contradiction — so a half-year or bare year that fails to parse lets
+    two different periods be compared as if they were the same one.
+
+    These are typed but stay dateless: half and fiscal-year boundaries
+    depend on a jurisdiction the extractor must not assume.
+    """
+    resolved, start, end = parse_time(text)
+    assert resolved == kind
+    if kind in (TimeKind.FISCAL_YEAR, TimeKind.RANGE):
+        assert start is None and end is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("January 13, 2022", date(2022, 1, 13)),
+        ("As of December 31, 2021", date(2021, 12, 31)),
+        ("September 29, 2021", date(2021, 9, 29)),
+        ("13 January 2022", date(2022, 1, 13)),
+    ],
+)
+def test_parse_time_reads_month_first_dates(text, expected):
+    kind, start, end = parse_time(text)
+    assert kind == TimeKind.DATE
+    assert start == end == expected
+
+
+def test_a_half_year_is_not_the_same_period_as_its_full_year():
+    """"H1 FY25" and "FY25" must compare as different periods, otherwise
+    a half-year figure corroborates a full-year one."""
+    from app.matching.compare import compare_context
+
+    half = _fact_for_time("H1 FY25")
+    full = _fact_for_time("FY25")
+    assert compare_context(half, full).dimensions["time"] == DimensionVerdict.INCOMPATIBLE
+
+
+def _fact_for_time(time_text):
+    from app.models import Fact
+
+    kind, start, end = parse_time(time_text)
+    return Fact(
+        document_id=uuid4(), subject="s", predicate="p",
+        value_kind=ValueKind.NUMERIC, value_text="1", value_number=1.0,
+        normalized_number=1.0, normalized_unit="fraction",
+        time_text=time_text, time_kind=kind, time_start=start, time_end=end,
+        evidence_ids=[uuid4()], extraction_confidence=0.9,
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Q1", "Q1 FY24", "Q1 FY2025/26", "Q1:2024-25", "Q2 2024-25", "Q2 of FY25"],
+)
+def test_parse_time_types_quarters_in_every_year_convention(text):
+    """An unmatched quarter leaves the period UNKNOWN, and UNKNOWN never
+    blocks a contradiction, so two different quarters get reported as
+    disagreeing. Boundaries stay unset: they follow the source's fiscal
+    convention."""
+    kind, start, end = parse_time(text)
+    assert kind == TimeKind.QUARTER
+    assert start is None and end is None
+
+
+@pytest.mark.parametrize("text", ["Quarterly", "Q5 FY24", "Q"])
+def test_parse_time_rejects_non_quarters(text):
+    assert parse_time(text)[0] == TimeKind.UNKNOWN
+
+
+def test_a_quarter_and_a_half_year_are_different_periods():
+    from app.matching.compare import compare_context
+
+    quarter = _fact_for_time("Q1 FY2025/26")
+    half = _fact_for_time("H1 FY25")
+    assert compare_context(quarter, half).dimensions["time"] == (
+        DimensionVerdict.INCOMPATIBLE
+    )

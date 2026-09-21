@@ -58,8 +58,37 @@ _MONTHS = {
     "september": 9, "october": 10, "november": 11, "december": 12,
 }
 
-_FY_RE = re.compile(r"^fy\s?(\d{2}|\d{4})(?:\s*[-–/]\s*(\d{2}|\d{4}))?$", re.IGNORECASE)
-_QUARTER_RE = re.compile(r"^q[1-4](\s+fy\s?\d{2,4})?$", re.IGNORECASE)
+# A fiscal label may be prefixed by a half ("H1 FY25", "H1 of FY25") or
+# written in words ("Fiscal 2021"). All stay dateless: the half and the
+# year boundaries both depend on a jurisdiction the extractor must not
+# assume. The verbatim text carries the distinction, so "H1 FY25" and
+# "FY25" compare as different periods rather than the same one.
+_FY_RE = re.compile(
+    r"^(?:h[12]\s*(?:of\s*)?)?(?:fy|fiscal)\s?(\d{2}|\d{4})"
+    r"(?:\s*[-–/]\s*(\d{2}|\d{4}))?$",
+    re.IGNORECASE,
+)
+# "January 13, 2022", optionally prefixed by "as of" / "as on".
+_MDY_RE = re.compile(
+    r"^(?:as\s+(?:of|on|at)\s+)?([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$",
+    re.IGNORECASE,
+)
+# A bare four-digit year is a real period but its boundaries depend on
+# whether the source means a calendar or a fiscal year, so it is typed
+# without dates and compared on its text alone.
+_BARE_YEAR_RE = re.compile(r"^(\d{4})$")
+# A quarter may name its year in several conventions: "Q1", "Q1 FY24",
+# "Q1 FY2025/26", "Q1:2024-25", "Q2 2024-25". Failing to type one leaves
+# the period UNKNOWN, and UNKNOWN never blocks a contradiction -- so an
+# unmatched quarter lets two different periods be reported as
+# disagreeing. Still dateless: quarter boundaries follow the fiscal
+# convention of the source, which the extractor must not assume.
+_QUARTER_RE = re.compile(
+    r"^q[1-4]"
+    r"(?:\s*[:\s]\s*(?:of\s+)?(?:fy|fiscal)?\s*"
+    r"\d{2,4}(?:\s*[-–/]\s*\d{2,4})?)?$",
+    re.IGNORECASE,
+)
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _DMY_RE = re.compile(r"^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$")
 _MONTH_YEAR_RE = re.compile(r"^([A-Za-z]+)\s+(\d{4})$")
@@ -149,12 +178,19 @@ def parse_time(text: str | None) -> tuple[TimeKind, date | None, date | None]:
             return TimeKind.DATE, d, d
         except ValueError:
             return TimeKind.UNKNOWN, None, None
+    m = _MDY_RE.match(s)
+    if m and m.group(1).lower() in _MONTHS:
+        try:
+            d = date(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2)))
+            return TimeKind.DATE, d, d
+        except ValueError:
+            return TimeKind.UNKNOWN, None, None
     m = _MONTH_YEAR_RE.match(s)
     if m and m.group(1).lower() in _MONTHS:
         year, month = int(m.group(2)), _MONTHS[m.group(1).lower()]
         last = calendar.monthrange(year, month)[1]
         return TimeKind.DATE, date(year, month, 1), date(year, month, last)
-    if _RANGE_RE.match(s):
+    if _RANGE_RE.match(s) or _BARE_YEAR_RE.match(s):
         return TimeKind.RANGE, None, None
     return TimeKind.UNKNOWN, None, None
 
