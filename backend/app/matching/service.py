@@ -283,7 +283,18 @@ def run_matching_for_document(
                         )
                     else:
                         rtype = judgment.relationship_type
-                        confidence = judgment.confidence
+                        if metadata.get("match_tier") == "weak":
+                            # On the weak tier the open question is whether
+                            # these are even the same claim, and the judge
+                            # is not asked that -- it is handed the pair as
+                            # given. So it may pick the type and argue it,
+                            # but it cannot upgrade an inexact match into a
+                            # confident verdict. Other tiers already
+                            # established the match deterministically, so
+                            # the judge's own confidence stands there.
+                            confidence = min(judgment.confidence, confidence)
+                        else:
+                            confidence = judgment.confidence
                         explanation = judgment.explanation
                         metadata["llm_model"] = settings.groq_model
             rel = Relationship(

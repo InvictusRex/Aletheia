@@ -28,13 +28,16 @@ from app.db.repositories import (
     save_ingestion,
 )
 from app.matching.compare import (
+    CLAIM_MATCH_THRESHOLD,
     RELATIVE_TOLERANCE,
+    claim_similarity,
     claims_comparable,
     classify,
     compare_context,
     compare_numeric,
     semantic_overlap,
     strong_match,
+    weak_match,
 )
 from app.matching.embeddings import lexical_score
 from app.matching.service import (
@@ -1415,3 +1418,130 @@ def test_recompute_reclassifies_in_place_and_keeps_the_row_id(db_session):
     assert len(stored) == 1, "recompute must update in place, not duplicate"
     assert stored[0].id == row_id
     assert stored[0].relationship_type != RelationshipType.CORROBORATES
+
+
+# ---------------------------------------------------------------------------
+# Weak match tier: the same claim worded differently across documents
+# ---------------------------------------------------------------------------
+
+
+def _claim(doc, subject, predicate, number, **overrides):
+    kwargs = {
+        "canonical_subject": subject.lower(),
+        "canonical_predicate": predicate.lower(),
+        "subject": subject,
+        "predicate": predicate,
+        "value_kind": ValueKind.PERCENTAGE,
+        "value_text": str(number),
+        "value_number": number,
+        "normalized_number": number / 100.0,
+        "normalized_unit": "fraction",
+        "time_text": None,
+        "time_kind": TimeKind.UNKNOWN,
+        "scope_text": None,
+        "geography": None,
+        "estimate_status": EstimateStatus.UNKNOWN,
+    }
+    kwargs.update(overrides)
+    return _mk_fact(doc, [uuid4()], **kwargs)
+
+
+def test_weak_match_needs_the_combined_phrase_not_the_split():
+    """The extractor splits a claim between subject and predicate
+    arbitrarily, so comparing the two fields separately misses
+    restatements that the combined phrase catches."""
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4)
+    assert strong_match(a, b) is False
+    assert weak_match(a, b) is True
+    assert claim_similarity(a, b) >= CLAIM_MATCH_THRESHOLD
+
+
+def test_weak_equivalent_values_corroborate_for_review():
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 10.1)
+    rtype, confidence, _expl, meta, needs_llm = classify(a, b)
+    assert rtype == RelationshipType.CORROBORATES
+    assert confidence <= 0.6, "a weak match must never be asserted confidently"
+    assert needs_llm is True
+    assert meta["match_tier"] == "weak"
+
+
+def test_weak_different_values_contradict_for_review():
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4)
+    rtype, confidence, _expl, meta, needs_llm = classify(a, b)
+    assert rtype == RelationshipType.CONTRADICTS
+    assert confidence <= 0.6
+    assert needs_llm is True
+    assert meta["match_tier"] == "weak"
+
+
+def test_a_differing_period_still_wins_over_a_weak_contradiction():
+    """Case 3 must not be swallowed by the new tier: a real contextual
+    dimension still explains the gap."""
+    a = _claim(uuid4(), "India", "GDP growth", 6.4,
+               time_text="FY25", time_kind=TimeKind.FISCAL_YEAR)
+    b = _claim(uuid4(), "India", "GDP growth rate", 6.5,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    rtype, _c, _e, _m, _n = classify(a, b)
+    assert rtype == RelationshipType.CONTEXTUAL_DIFFERENCE
+
+
+def test_unrelated_claims_sharing_a_noun_never_contradict():
+    a = _claim(uuid4(), "Company", "share capital percentage", 99.99)
+    b = _claim(uuid4(), "Barasia", "percentage of total share", 0.74)
+    assert weak_match(a, b) is False
+    assert classify(a, b)[0] != RelationshipType.CONTRADICTS
+
+
+def test_strong_match_verdicts_keep_their_confidence():
+    a = _claim(uuid4(), "India", "GDP growth", 6.4)
+    b = _claim(uuid4(), "India", "GDP growth", 9.9)
+    rtype, confidence, _e, meta, needs_llm = classify(a, b)
+    assert rtype == RelationshipType.CONTRADICTS
+    assert confidence >= 0.7
+    assert needs_llm is False
+    assert meta.get("match_tier") is None
+
+
+def test_different_entities_sharing_a_generic_metric_are_not_a_weak_match():
+    """Regression: "Barasia" / "percentage of total share capital" and
+    "Company" / "share capital percentage" reach 0.6 on the combined
+    phrase while naming nothing in common, and were classified
+    CONTRADICTS at 0.95 confidence."""
+    a = _claim(uuid4(), "Barasia", "percentage of total share capital", 0.74)
+    b = _claim(uuid4(), "Company", "share capital percentage", 99.99)
+    assert claim_similarity(a, b) >= CLAIM_MATCH_THRESHOLD
+    assert weak_match(a, b) is False
+    assert classify(a, b)[0] != RelationshipType.CONTRADICTS
+
+
+def test_judgment_cannot_raise_confidence_above_the_deterministic_cap(db_session):
+    """The uncertainty lives in the inexact match, not in the reasoning
+    about it, so the judge may pick the type but never upgrade how sure
+    the system claims to be."""
+    doc_a, doc_b = uuid4(), uuid4()
+    a = _claim(doc_a, "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    b = _claim(doc_b, "Gross Fixed Capital Formation", "growth rate", 25.4)
+    save_facts(db_session, [a, b])
+    db_session.commit()
+
+    deterministic_confidence = classify(a, b)[1]
+    overconfident = _CannedTransport(
+        json.dumps({
+            "relationship_type": "CONTRADICTS",
+            "confidence": 0.99,
+            "explanation": "The judge is very sure about this.",
+        })
+    )
+    report = run_matching_for_document(
+        db_session, str(doc_a), embedder=None, transport=overconfident
+    )
+    db_session.commit()
+
+    assert len(report.relationships) == 1
+    rel = report.relationships[0]
+    assert overconfident.prompts, "the judgment layer should have been consulted"
+    assert rel.confidence <= deterministic_confidence
+    assert rel.confidence < 0.99

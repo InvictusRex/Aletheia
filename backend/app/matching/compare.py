@@ -15,13 +15,28 @@ Tri-state rule (applies to every context dimension):
 Frozen precedence (``classify`` implements exactly this order):
 
 * (a) numeric-equivalent + compatible context + strong match -> ``CORROBORATES``
+* (a2) numeric-equivalent + no NON-NAMING incompatible dim + weak match
+  -> ``CORROBORATES`` (reviewable: confidence <=0.6, ``needs_llm``)
 * (b) materially-different + zero ``INCOMPATIBLE`` dims + strong match
   -> ``CONTRADICTS`` (unknowns recorded, confidence capped at 0.7)
+* (b2) materially-different + no NON-NAMING incompatible dim + weak match
+  -> ``CONTRADICTS`` (reviewable: confidence <=0.6, ``needs_llm``)
 * (c) >=1 ``KNOWN`` differing dimension explaining the gap + claims_comparable
   gate + grounded comparison -> ``CONTEXTUAL_DIFFERENCE``
 * (d) partial semantic overlap via the claims_comparable gate + grounded
   comparison -> ``RELATED``, else ``UNRELATED``
 * (e) otherwise -> ``UNRELATED``
+
+Match tiers. ``strong_match`` requires exact canonical subject AND predicate
+equality; it is the only tier that yields a confident verdict. Independently
+extracted documents almost never phrase a claim identically, so that tier
+alone leaves corroboration and contradiction unreachable in practice. The
+``weak_match`` tier compares the COMBINED subject+predicate phrase, because
+the extractor splits a claim between those two fields arbitrarily, and the
+naming dimensions (entity, predicate) are then excluded from the context
+test -- a different wording for the same metric is naming variance, not a
+contextual reason for a value gap. A weak-tier verdict is always reviewable
+(``needs_llm=True``, confidence <=0.6) and never asserted.
 
 Grounded means comparable normalized numbers (``EXACT``/``APPROXIMATE``/
 ``DIFFERENT``) or the same claim on both sides (shared canonical subject
@@ -283,6 +298,71 @@ def compare_context(a: Fact, b: Fact) -> ContextComparison:
 # ---------------------------------------------------------------------------
 
 
+CLAIM_MATCH_THRESHOLD = 0.6
+"""Minimum combined-claim overlap for a same-claim candidate.
+
+Measured on the starter corpus: every threshold from 0.99 down to 0.4
+surfaces the same pairs when subject and predicate are compared
+separately, because the extractor splits a claim between the two fields
+arbitrarily ("India" / "registered a growth rate of" vs "India" /
+"growth"). Comparing the combined phrase is what separates them, and 0.6
+is where real restatements appear while unrelated claims sharing one
+noun do not. A match at this tier is never final on its own: it yields a
+reviewable verdict, not a confident one.
+"""
+
+
+def claim_similarity(a: Fact, b: Fact) -> float:
+    """Token-Jaccard over the combined subject+predicate content phrase.
+
+    Scaffolding stopwords are excluded so two facts sharing only filler
+    never score. Canonical forms are preferred, raw text is the fallback.
+    """
+    a_tokens = _content_tokens(f"{_effective_entity(a) or ''} {_effective_predicate(a) or ''}")
+    b_tokens = _content_tokens(f"{_effective_entity(b) or ''} {_effective_predicate(b) or ''}")
+    union = a_tokens | b_tokens
+    if not union:
+        return 0.0
+    return len(a_tokens & b_tokens) / len(union)
+
+
+SUBJECT_MATCH_THRESHOLD = 0.5
+"""Minimum subject overlap before a combined-phrase match is believed.
+
+The combined phrase alone is not enough: two facts about different
+entities that share a generic metric name ("Barasia" / "percentage of
+total share capital" vs "Company" / "share capital percentage") reach
+0.6 on the combined tokens while naming nothing in common. Requiring the
+subjects themselves to overlap separates a reworded claim about one
+entity from unrelated claims about two.
+"""
+
+
+def weak_match(a: Fact, b: Fact) -> bool:
+    """Same claim by combined phrasing, but not an exact canonical match.
+
+    Requires the same value kind, the same effective unit, subjects that
+    overlap on their own, and a combined-phrase match, so only the
+    wording differs. Used to surface restatements that ``strong_match``
+    misses; the caller must keep the resulting verdict reviewable rather
+    than confident.
+    """
+    if strong_match(a, b):
+        return False
+    if a.value_kind != b.value_kind:
+        return False
+    if _effective_unit(a) != _effective_unit(b):
+        return False
+    a_subject = _content_tokens(_effective_entity(a) or "")
+    b_subject = _content_tokens(_effective_entity(b) or "")
+    if not a_subject or not b_subject:
+        return False
+    subject_overlap = len(a_subject & b_subject) / len(a_subject | b_subject)
+    if subject_overlap < SUBJECT_MATCH_THRESHOLD:
+        return False
+    return claim_similarity(a, b) >= CLAIM_MATCH_THRESHOLD
+
+
 def strong_match(a: Fact, b: Fact) -> bool:
     """Whether two facts align on entity, predicate, kind, and unit.
 
@@ -524,6 +604,7 @@ def classify(
     incompatible = ctx.incompatible
     unknown = ctx.unknown
     strong = strong_match(a, b)
+    weak = weak_match(a, b)
     overlap = semantic_overlap(a, b)
     comparable = claims_comparable(a, b)
     grounded = (
@@ -533,6 +614,16 @@ def classify(
 
     numeric_equivalent = verdict in (NumericVerdict.EXACT, NumericVerdict.APPROXIMATE)
     materially_different = verdict == NumericVerdict.DIFFERENT
+
+    # Entity/predicate disagreement is naming variance, not a contextual
+    # dimension like time or scope. When the combined claim already
+    # matches, those two must not be read as context that explains a
+    # value gap -- otherwise every restatement of the same metric is
+    # filed as a contextual difference and neither corroboration nor
+    # contradiction is ever reachable across differently-worded sources.
+    context_incompatible = [
+        dim for dim in incompatible if dim not in ("entity", "predicate")
+    ]
 
     if numeric_equivalent and not incompatible:
         if strong:
@@ -558,6 +649,23 @@ def classify(
                 _metadata(a, b, verdict, incompatible, unknown, strong, overlap),
                 True,
             )
+    if numeric_equivalent and not context_incompatible and weak:
+        # Same claim by combined phrasing, equivalent values, no real
+        # context conflict: a restatement of one fact in different words.
+        # Inexact match, so reviewable rather than asserted.
+        explanation = _explain(
+            "corroborates", a, b, verdict, ctx, strong, overlap, True
+        )
+        metadata = _metadata(a, b, verdict, incompatible, unknown, strong, overlap)
+        metadata["claim_similarity"] = round(claim_similarity(a, b), 4)
+        metadata["match_tier"] = "weak"
+        return (
+            RelationshipType.CORROBORATES,
+            0.5 if unknown else 0.6,
+            explanation,
+            metadata,
+            True,
+        )
     if materially_different and not incompatible and strong:
         confidence = 0.7 if unknown else 0.85
         explanation = _explain(
@@ -569,6 +677,25 @@ def classify(
             explanation,
             _metadata(a, b, verdict, incompatible, unknown, strong, overlap),
             False,
+        )
+    if materially_different and not context_incompatible and weak:
+        # Same claim by combined phrasing but not by exact canonical
+        # strings. Materially different values with no incompatible
+        # context is the shape of a contradiction, but the match itself
+        # is inexact, so this is surfaced for review (and for the
+        # judgment layer) rather than asserted.
+        explanation = _explain(
+            "contradicts", a, b, verdict, ctx, strong, overlap, True
+        )
+        metadata = _metadata(a, b, verdict, incompatible, unknown, strong, overlap)
+        metadata["claim_similarity"] = round(claim_similarity(a, b), 4)
+        metadata["match_tier"] = "weak"
+        return (
+            RelationshipType.CONTRADICTS,
+            0.5 if unknown else 0.6,
+            explanation,
+            metadata,
+            True,
         )
     if incompatible and comparable and grounded:
         explanation = _explain(
