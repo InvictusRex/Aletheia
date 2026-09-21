@@ -1545,3 +1545,22 @@ def test_judgment_cannot_raise_confidence_above_the_deterministic_cap(db_session
     assert overconfident.prompts, "the judgment layer should have been consulted"
     assert rel.confidence <= deterministic_confidence
     assert rel.confidence < 0.99
+
+
+def test_weak_match_allows_numeric_and_percentage_to_mix():
+    """One source writes "10.1 per cent" (PERCENTAGE), another writes
+    "25.4" with unit "per cent" (NUMERIC). Both normalize to the same
+    fraction, so the raw kind records only how the extractor saw it."""
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4,
+               value_kind=ValueKind.NUMERIC, value_text="25.4")
+    assert weak_match(a, b) is True
+    assert classify(a, b)[0] == RelationshipType.CONTRADICTS
+
+
+def test_weak_match_still_rejects_text_values():
+    a = _claim(uuid4(), "India", "GDP growth", 6.4)
+    b = _claim(uuid4(), "India", "GDP growth rate", 6.5,
+               value_kind=ValueKind.TEXT, value_text="six point five",
+               normalized_number=None, normalized_unit=None)
+    assert weak_match(a, b) is False

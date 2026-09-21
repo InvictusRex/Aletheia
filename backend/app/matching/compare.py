@@ -349,7 +349,14 @@ def weak_match(a: Fact, b: Fact) -> bool:
     """
     if strong_match(a, b):
         return False
-    if a.value_kind != b.value_kind:
+    # Both sides must be quantities, but NUMERIC and PERCENTAGE may mix:
+    # one source writes "10.1 per cent" and another writes "25.4" with
+    # unit "per cent", so the kind records how the extractor saw it
+    # rather than what the value is. Once both normalize to the same
+    # unit they are the same kind of quantity, and requiring the raw
+    # kinds to agree would reject exactly the cross-source restatements
+    # this tier exists to find.
+    if not {a.value_kind, b.value_kind} <= {ValueKind.NUMERIC, ValueKind.PERCENTAGE}:
         return False
     if _effective_unit(a) != _effective_unit(b):
         return False
