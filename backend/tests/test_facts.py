@@ -1223,3 +1223,35 @@ def test_prompts_fit_context_minus_reserved(db_session):
     assert chunks
     for chunk in chunks:
         assert estimate_tokens(build_extraction_prompt(chunk)) <= ceiling
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("6.4 per cent", 6.4),
+        ("20 per cent", 20.0),
+        ("13.6 percent", 13.6),
+        ("5 percentage", 5.0),
+        ("-2.5 per cent", -2.5),
+        ("1.6%", 1.6),
+    ],
+)
+def test_parse_number_accepts_word_form_percentages(text, expected):
+    """Official prose writes "6.4 per cent" far more often than "6.4%".
+
+    Matching only the symbol left the value unparsed, so the fact was
+    stored with no number and could never be compared to anything.
+    """
+    assert parse_number(text) == expected
+
+
+def test_word_form_percentage_resolves_to_percentage_kind():
+    from app.models import FactDraft
+
+    draft = FactDraft(
+        subject="s", predicate="p", value_text="6.4 per cent",
+        value_kind=ValueKind.NUMERIC, evidence_ids=[uuid4()], confidence=0.9,
+    )
+    kind, flags = resolve_kind(draft)
+    assert kind == ValueKind.PERCENTAGE
+    assert any(f.startswith("kind_corrected:") for f in flags)

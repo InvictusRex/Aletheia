@@ -612,3 +612,86 @@ def test_normalize_document_facts_rerun_does_not_grow_flags(db_session):
     assert after_first == ["norm:unit_unknown:km"]
     assert after_second == after_first
     assert second.facts_flagged == 1
+
+
+# ---------------------------------------------------------------------------
+# Magnitude carried by the unit rather than the value text
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value_text", "value_number", "unit", "expected", "expected_unit"),
+    [
+        ("14.0", 14.0, "US$ billion", 14000.0, "USD million"),
+        ("29.2", 29.2, "US$ billion", 29200.0, "USD million"),
+        ("2.5", 2.5, "US$ trillion", 2500000.0, "USD million"),
+        ("740", 740.0, "Mn express parcels", 740000000.0, "express parcels"),
+    ],
+)
+def test_magnitude_in_unit_is_applied_to_the_number(
+    value_text, value_number, unit, expected, expected_unit
+):
+    """An extractor may put the scale in the unit instead of the value.
+
+    Ignoring it is a magnitude-sized error: "14.0" with unit
+    "US$ billion" previously normalized to 1.4e-05 USD million.
+    """
+    out = normalize_fact(
+        _fact(value_text=value_text, value_number=value_number, unit=unit)
+    )
+    assert out.normalized_number == pytest.approx(expected)
+    assert out.normalized_unit == expected_unit
+
+
+@pytest.mark.parametrize(
+    ("value_text", "value_number", "unit", "expected"),
+    [
+        ("Rs 81415 Mn", 81415000000.0, "Rs Mn", 8141.5),
+        ("1,429K tonnes", 1429000.0, "K tonnes", 1.429),
+        ("5.1 trillion", 5.1e12, "US$", 5100000.0),
+    ],
+)
+def test_magnitude_never_applied_twice(value_text, value_number, unit, expected):
+    """When the value text carries the scale the validator already applied
+    it; re-applying from the unit would be a magnitude-sized error the
+    other way."""
+    out = normalize_fact(
+        _fact(value_text=value_text, value_number=value_number, unit=unit)
+    )
+    assert out.normalized_number == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Percent marker carried by the unit rather than the value text
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected", "expected_unit"),
+    [
+        ("%", 0.017, "fraction"),
+        ("percent", 0.017, "fraction"),
+        ("per cent", 0.017, "fraction"),
+        ("Percentage", 0.017, "fraction"),
+        ("bps", 0.00017, "fraction"),
+        ("Percentage points", 1.7, "percentage_point"),
+    ],
+)
+def test_percent_marker_in_unit_is_canonicalized(unit, expected, expected_unit):
+    """resolve_kind only sees a "%" in the value text, so "1.7" with unit
+    "%" stays NUMERIC and previously normalized to 1.7 "%" — never
+    comparable against a PERCENTAGE fact stating the same thing."""
+    out = normalize_fact(_fact(value_text="1.7", value_number=1.7, unit=unit))
+    assert out.normalized_number == pytest.approx(expected)
+    assert out.normalized_unit == expected_unit
+
+
+def test_percent_of_a_named_base_keeps_its_descriptive_unit():
+    """"% of GDP" is a share of a named base, not a bare percentage;
+    collapsing it to a dimensionless fraction would make it compare equal
+    to any other ratio."""
+    out = normalize_fact(
+        _fact(value_text="1.2", value_number=1.2, unit="% of GDP")
+    )
+    assert out.normalized_unit == "% of GDP"
+    assert out.normalized_number == pytest.approx(1.2)

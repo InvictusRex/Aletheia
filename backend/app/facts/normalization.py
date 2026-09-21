@@ -31,9 +31,12 @@ Canonical unit vocabulary (closed set emitted by this module):
   deliberately NOT a fraction — a "6.5 pp" move stays ``6.5``, it is NOT
   divided by 100. Percentage points are additive deltas, not ratios.
 - cleaned count units — descriptive remainder after stripping standalone
-  magnitude tokens (e.g. ``"Mn express parcels"`` -> ``"express parcels"``)
-  with the number passed through unchanged (suffix scaling was already
-  applied by the validator).
+  magnitude tokens (e.g. ``"Mn express parcels"`` -> ``"express parcels"``).
+  The magnitude is applied to the number here ONLY when the value text did
+  not already carry one: an extractor may write the scale either in the
+  value (``"740 Mn"``, already scaled by the validator) or in the unit
+  (value ``"740"``, unit ``"Mn express parcels"``), and only the second
+  form still needs scaling.
 - ``None`` — clean skips (TEXT kind / missing number), scale-only counts
   (e.g. bare ``"Mn"``), and unknown/ambiguous units (with a ``norm:`` flag).
 
@@ -134,6 +137,28 @@ MAGNITUDE_TOKENS = frozenset(
         "trillion",
     }
 )
+
+#: standalone magnitude token -> its multiplier. Applied ONLY when the
+#: magnitude lives in the unit and not in the value text: an extractor may
+#: write either "US$ 14 billion" (validator already scaled it) or value
+#: "14.0" with unit "US$ billion" (nothing scaled it yet). Without this the
+#: second form is off by the whole magnitude.
+MAGNITUDE_SCALE: dict[str, float] = {
+    "k": 1e3,
+    "thousand": 1e3,
+    "m": 1e6,
+    "mn": 1e6,
+    "million": 1e6,
+    "lakh": 1e5,
+    "lac": 1e5,
+    "cr": 1e7,
+    "crore": 1e7,
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "t": 1e12,
+    "trillion": 1e12,
+}
 
 #: currency-like tokens with no canonical scale -> norm:currency_unknown.
 UNKNOWN_CURRENCY_TOKENS = frozenset(
@@ -390,8 +415,24 @@ _PUNCT_RE = re.compile(r"[^a-z0-9\s]")
 _WS_RE = re.compile(r"\s+")
 _PP_RE = re.compile(r"(?<![a-z0-9])(?:percentage points?|pp)(?![a-z0-9])")
 _BP_RE = re.compile(r"(?<![a-z0-9])(?:basis points?|bps?)(?![a-z0-9])")
+#: A unit that means "this number is a percentage" and nothing else.
+#: Anchored: "% of gdp" is a share of a named base, not a bare percent,
+#: and must keep its descriptive unit rather than silently becoming a
+#: dimensionless fraction.
+_PERCENT_UNIT_RE = re.compile(r"%|per ?cent(?:age)?|percent(?:age)?")
 _MAGNITUDE_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:"
+    + "|".join(sorted(MAGNITUDE_TOKENS, key=len, reverse=True))
+    + r")(?:s)?(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+
+#: Same tokens, but a digit may sit immediately before them, because the
+#: validator scales a suffix written flush against the number ("1,429K").
+#: Used only to detect whether the VALUE already carries its magnitude;
+#: stripping still uses the stricter whole-token form above.
+_VALUE_MAGNITUDE_RE = re.compile(
+    r"(?<![A-Za-z])(?:"
     + "|".join(sorted(MAGNITUDE_TOKENS, key=len, reverse=True))
     + r")(?:s)?(?![A-Za-z0-9])",
     re.IGNORECASE,
@@ -485,12 +526,42 @@ def _normalize_percentage(fact: Fact) -> tuple[float | None, str | None]:
     return value / 100.0, FRACTION_UNIT
 
 
+def _unit_scale(fact: Fact) -> float:
+    """Multiplier for a magnitude carried by the unit rather than the value.
+
+    Returns 1.0 whenever the value text already carries a magnitude token,
+    because the validator scaled it there and applying it twice would be a
+    million-fold error in the other direction.
+    """
+    if _VALUE_MAGNITUDE_RE.search(fact.value_text or ""):
+        return 1.0
+    for token in _tokens(fact.unit):
+        scale = MAGNITUDE_SCALE.get(token)
+        if scale is not None:
+            return scale
+    return 1.0
+
+
 def _normalize_numeric(
     fact: Fact,
 ) -> tuple[float | None, str | None, str | None]:
     """Normalize a NUMERIC-kind value; third element is a norm: flag or None."""
     value = fact.value_number
     assert value is not None  # caller guarantees a parsed number
+    value *= _unit_scale(fact)
+
+    # A percent marker may live in the unit rather than the value text
+    # ("1.7" + unit "%"), in which case resolve_kind saw no "%" and left
+    # the fact NUMERIC. Canonicalize it here so it compares against a
+    # PERCENTAGE-kind fact stating the same thing.
+    unit_text = (fact.unit or "").lower()
+    if unit_text:
+        if _PP_RE.search(unit_text):
+            return value, PERCENTAGE_POINT_UNIT, None
+        if _BP_RE.search(unit_text):
+            return value * 0.0001, FRACTION_UNIT, None
+        if _PERCENT_UNIT_RE.fullmatch(unit_text.strip()):
+            return value / 100.0, FRACTION_UNIT, None
 
     currency = _detect_currency(fact)
     if currency is not None:

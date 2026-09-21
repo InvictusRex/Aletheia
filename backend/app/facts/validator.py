@@ -45,6 +45,13 @@ _NUMBER_SUFFIXES: tuple[tuple[str, float], ...] = (
 
 _CURRENCY_PREFIXES = ("₹", "rs.", "rs", "$", "€", "£", "inr", "usd")
 
+# Documents write percentages as a symbol OR as words ("6.4 per cent"),
+# and the word form is the common one in official prose. Matching only
+# "%" loses the value entirely: it parses as nothing and the fact is
+# stored with no number, so it can never be compared.
+_PERCENT_WORD_RE = re.compile(r"(?:%|percent(?:age)?s?)$")
+_PERCENT_TEXT_RE = re.compile(r"(?:%|per\s?cent(?:age)?s?)\s*$", re.IGNORECASE)
+
 _MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4,
     "may": 5, "june": 6, "july": 7, "august": 8,
@@ -95,6 +102,7 @@ def parse_number(text: str) -> float | None:
             s = s[len(prefix):]
             break
     s = take_sign(s)
+    s = _PERCENT_WORD_RE.sub("", s)
     multiplier = 1.0
     for suffix, factor in _NUMBER_SUFFIXES:
         if s.endswith(suffix):
@@ -103,8 +111,6 @@ def parse_number(text: str) -> float | None:
                 multiplier = factor
                 s = core
                 break
-    if s.endswith("%"):
-        s = s[:-1]
     try:
         value = float(s)
     except ValueError:
@@ -157,7 +163,7 @@ def resolve_kind(draft: FactDraft) -> tuple[ValueKind, list[str]]:
     """Resolve the value kind deterministically with correction flags."""
     flags: list[str] = []
     text = draft.value_text.strip()
-    if text.endswith("%"):
+    if _PERCENT_TEXT_RE.search(text):
         if draft.value_kind is not None and draft.value_kind != ValueKind.PERCENTAGE:
             flags.append(f"kind_corrected:{draft.value_kind.value}->PERCENTAGE")
         return ValueKind.PERCENTAGE, flags
