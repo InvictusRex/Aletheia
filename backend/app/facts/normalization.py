@@ -54,6 +54,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import repositories
+from app.facts.canonicalization import apply_aliases, build_alias_map
 from app.facts.validator import parse_number, parse_time  # noqa: F401 -- reused by contract: validator owns parsing; normalization never re-parses.
 from app.models.fact import Fact, ValueKind
 
@@ -634,7 +635,7 @@ def _replace_norm_flags(
     return preserved + fresh
 
 
-def normalize_fact(fact: Fact) -> Fact:
+def normalize_fact(fact: Fact, aliases: dict[str, str] | None = None) -> Fact:
     """Return a copy of ``fact`` with ONLY the five reserved fields changed.
 
     The input object is never mutated (all lists are rebuilt). TEXT-kind
@@ -657,8 +658,14 @@ def normalize_fact(fact: Fact) -> Fact:
     updated = fact.model_copy(deep=True)
     updated.normalized_number = normalized_number
     updated.normalized_unit = normalized_unit
-    updated.canonical_subject = _canonical_name(fact.subject)
-    updated.canonical_predicate = _canonical_name(fact.predicate)
+    # Syntactic cleanup first, then corpus-mined abbreviation expansion,
+    # so "GFCF" and "Gross Fixed Capital Formation" converge on one
+    # string and the matching layer can see them as the same claim.
+    resolved = aliases or {}
+    updated.canonical_subject = apply_aliases(_canonical_name(fact.subject), resolved)
+    updated.canonical_predicate = apply_aliases(
+        _canonical_name(fact.predicate), resolved
+    )
     updated.ambiguity_flags = _replace_norm_flags(fact.ambiguity_flags, new_flags)
     return updated
 
@@ -670,6 +677,7 @@ class NormalizationReport(BaseModel):
     facts_processed: int = 0
     facts_normalized: int = 0  # normalized_number set OR canonical name set
     facts_flagged: int = 0  # any ambiguity flag starting with "norm:"
+    aliases_applied: int = 0  # abbreviation definitions mined from the corpus
     errors: list[str] = []
 
 
@@ -695,10 +703,17 @@ def normalize_document_facts(session: Session, document_id: str) -> Normalizatio
         report.errors.append(f"list_facts_for_document failed: {type(exc).__name__}: {exc}")
         return report
 
+    try:
+        aliases = build_alias_map(repositories.list_evidence_texts(session))
+    except Exception as exc:  # alias mining must never fail normalization
+        report.errors.append(f"alias mining failed: {type(exc).__name__}: {exc}")
+        aliases = {}
+    report.aliases_applied = len(aliases)
+
     for fact in facts:
         report.facts_processed += 1
         try:
-            updated = normalize_fact(fact)
+            updated = normalize_fact(fact, aliases)
             repositories.update_fact_normalization(session, updated)
         except Exception as exc:  # per-fact containment; row untouched
             fid = getattr(fact, "id", "?")

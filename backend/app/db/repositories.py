@@ -166,6 +166,20 @@ def get_document_bundle(
     return document, pages, evidence
 
 
+def list_evidence_texts(session: Session) -> list[str]:
+    """Every stored evidence text, for corpus-wide alias mining.
+
+    Read-only. Ordered by id so the mined map is deterministic.
+    """
+    return [
+        row
+        for row in session.scalars(
+            select(EvidenceUnitRow.text).order_by(EvidenceUnitRow.id)
+        ).all()
+        if row
+    ]
+
+
 def list_documents(session: Session) -> list[Document]:
     """List all documents, ordered by creation time then id string.
 
