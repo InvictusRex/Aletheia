@@ -1468,8 +1468,12 @@ def test_weak_equivalent_values_corroborate_for_review():
 
 
 def test_weak_different_values_contradict_for_review():
-    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
-    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4)
+    # Both sides state the same period: PLAN 2.4 requires the same time
+    # before a disagreement may be asserted.
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
     rtype, confidence, _expl, meta, needs_llm = classify(a, b)
     assert rtype == RelationshipType.CONTRADICTS
     assert confidence <= 0.6
@@ -1496,8 +1500,12 @@ def test_unrelated_claims_sharing_a_noun_never_contradict():
 
 
 def test_strong_match_verdicts_keep_their_confidence():
-    a = _claim(uuid4(), "India", "GDP growth", 6.4)
-    b = _claim(uuid4(), "India", "GDP growth", 9.9)
+    # Both sides state the same period; PLAN 2.4 requires it before any
+    # tier may assert a disagreement.
+    a = _claim(uuid4(), "India", "GDP growth", 6.4,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    b = _claim(uuid4(), "India", "GDP growth", 9.9,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
     rtype, confidence, _e, meta, needs_llm = classify(a, b)
     assert rtype == RelationshipType.CONTRADICTS
     assert confidence >= 0.7
@@ -1551,9 +1559,11 @@ def test_weak_match_allows_numeric_and_percentage_to_mix():
     """One source writes "10.1 per cent" (PERCENTAGE), another writes
     "25.4" with unit "per cent" (NUMERIC). Both normalize to the same
     fraction, so the raw kind records only how the extractor saw it."""
-    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1)
+    a = _claim(uuid4(), "Gross Fixed Capital Formation GFCF", "growth rate", 10.1,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
     b = _claim(uuid4(), "Gross Fixed Capital Formation", "growth rate", 25.4,
-               value_kind=ValueKind.NUMERIC, value_text="25.4")
+               value_kind=ValueKind.NUMERIC, value_text="25.4",
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
     assert weak_match(a, b) is True
     assert classify(a, b)[0] == RelationshipType.CONTRADICTS
 
@@ -1564,3 +1574,86 @@ def test_weak_match_still_rejects_text_values():
                value_kind=ValueKind.TEXT, value_text="six point five",
                normalized_number=None, normalized_unit=None)
     assert weak_match(a, b) is False
+
+
+def test_weak_contradiction_is_withheld_when_a_period_is_missing():
+    """PLAN 2.4 requires the same time for a contradiction, and an
+    unstated period is not the same time -- it is no information.
+
+    Regression: an RBI fragment ("WPI inflation" / predicate "from" /
+    6.9, no period) was reported as contradicting a real FY24 figure.
+    """
+    a = _claim(uuid4(), "Wholesale price inflation", "rate", 6.9, time_text=None,
+               time_kind=TimeKind.UNKNOWN)
+    b = _claim(uuid4(), "Wholesale price inflation", "rate value", -0.7,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    rtype, confidence, _expl, meta, needs_llm = classify(a, b)
+    assert rtype != RelationshipType.CONTRADICTS
+    assert meta.get("withheld_verdict") == "CONTRADICTS"
+    assert "period" in meta.get("withheld_reason", "")
+    assert needs_llm is True
+    assert confidence <= 0.5
+
+
+def test_weak_contradiction_stands_when_both_periods_agree():
+    a = _claim(uuid4(), "Wholesale price inflation", "rate", 6.9,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    b = _claim(uuid4(), "Wholesale price inflation", "rate value", -0.7,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    rtype, _c, _e, meta, _n = classify(a, b)
+    assert rtype == RelationshipType.CONTRADICTS
+    assert meta["match_tier"] == "weak"
+
+
+def test_judgment_cannot_reinstate_a_withheld_verdict(db_session):
+    """The deterministic layer withholds a contradiction when neither
+    side states a period. The judge is handed the pair as given and is
+    not asked to establish the period, so it must not assert the very
+    verdict that was withheld for lack of evidence.
+
+    Regression: RBI "WPI inflation"/"from"/6.9 with no period was
+    withheld, then reinstated as CONTRADICTS by the judge.
+    """
+    doc_a, doc_b = uuid4(), uuid4()
+    a = _claim(doc_a, "Wholesale price inflation", "rate", 6.9,
+               time_text=None, time_kind=TimeKind.UNKNOWN)
+    b = _claim(doc_b, "Wholesale price inflation", "rate value", -0.7,
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    save_facts(db_session, [a, b])
+    db_session.commit()
+
+    insistent = _CannedTransport(json.dumps({
+        "relationship_type": "CONTRADICTS",
+        "confidence": 0.95,
+        "explanation": "These figures disagree.",
+    }))
+    report = run_matching_for_document(
+        db_session, str(doc_a), embedder=None, transport=insistent
+    )
+    db_session.commit()
+
+    assert len(report.relationships) == 1
+    rel = report.relationships[0]
+    assert insistent.prompts, "the judge should still have been consulted"
+    assert rel.relationship_type != RelationshipType.CONTRADICTS
+    assert rel.reasoning_metadata.get("llm_overruled") == "CONTRADICTS"
+
+
+def test_strong_contradiction_also_requires_an_agreed_period():
+    """An exact canonical match is not enough. Regression: "active
+    customers 33,250 (FY24)" vs "7,900 (nine months ended December
+    2021)" was reported as a contradiction; they are the same metric
+    three years apart."""
+    a = _claim(uuid4(), "Delhivery", "active customers", 33250.0,
+               value_kind=ValueKind.NUMERIC, value_text="33,250",
+               normalized_number=33250.0, normalized_unit="customers",
+               time_text="FY24", time_kind=TimeKind.FISCAL_YEAR)
+    b = _claim(uuid4(), "Delhivery", "active customers", 7900.0,
+               value_kind=ValueKind.NUMERIC, value_text="7,900",
+               normalized_number=7900.0, normalized_unit="customers",
+               time_text="nine months ended December 31, 2021",
+               time_kind=TimeKind.UNKNOWN)
+    assert strong_match(a, b) is True
+    rtype, _c, _e, meta, _n = classify(a, b)
+    assert rtype != RelationshipType.CONTRADICTS
+    assert meta.get("withheld_verdict") == "CONTRADICTS"

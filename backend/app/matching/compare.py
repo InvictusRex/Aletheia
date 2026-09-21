@@ -632,6 +632,11 @@ def classify(
         dim for dim in incompatible if dim not in ("entity", "predicate")
     ]
 
+    # PLAN 2.4 requires the SAME TIME for a contradiction, and an unknown
+    # period is not the same time -- it is no information. Without this,
+    # the same metric three years apart reads as a disagreement.
+    time_known_and_equal = ctx.dimensions.get("time") == _COMPATIBLE
+
     if numeric_equivalent and not incompatible:
         if strong:
             confidence = 0.95 if verdict == NumericVerdict.EXACT else 0.9
@@ -674,6 +679,24 @@ def classify(
             True,
         )
     if materially_different and not incompatible and strong:
+        if not time_known_and_equal:
+            # PLAN 2.4 requires the same time. An exact canonical match on
+            # entity and metric is not enough: "active customers 33,250
+            # (FY24)" and "7,900 (nine months ended December 2021)" are
+            # the same claim about different years, not a disagreement.
+            explanation = _explain(
+                "related", a, b, verdict, ctx, strong, overlap, True
+            )
+            metadata = _metadata(a, b, verdict, incompatible, unknown, strong, overlap)
+            metadata["withheld_verdict"] = "CONTRADICTS"
+            metadata["withheld_reason"] = "period not stated on both sides"
+            return (
+                RelationshipType.RELATED,
+                0.4,
+                explanation,
+                metadata,
+                True,
+            )
         confidence = 0.7 if unknown else 0.85
         explanation = _explain(
             "contradicts", a, b, verdict, ctx, strong, overlap, False
@@ -686,6 +709,22 @@ def classify(
             False,
         )
     if materially_different and not context_incompatible and weak:
+        if not time_known_and_equal:
+            explanation = _explain(
+                "related", a, b, verdict, ctx, strong, overlap, True
+            )
+            metadata = _metadata(a, b, verdict, incompatible, unknown, strong, overlap)
+            metadata["claim_similarity"] = round(claim_similarity(a, b), 4)
+            metadata["match_tier"] = "weak"
+            metadata["withheld_verdict"] = "CONTRADICTS"
+            metadata["withheld_reason"] = "period not stated on both sides"
+            return (
+                RelationshipType.RELATED,
+                0.4,
+                explanation,
+                metadata,
+                True,
+            )
         # Same claim by combined phrasing but not by exact canonical
         # strings. Materially different values with no incompatible
         # context is the shape of a contradiction, but the match itself

@@ -282,7 +282,22 @@ def run_matching_for_document(
                             f"{type(exc).__name__}: {exc}"
                         )
                     else:
-                        rtype = judgment.relationship_type
+                        withheld = metadata.get("withheld_verdict")
+                        if withheld and judgment.relationship_type.value == withheld:
+                            # The deterministic layer withheld this verdict
+                            # because a precondition was not met (e.g. neither
+                            # side states a period). The judge is handed the
+                            # pair as given and is not asked to establish that
+                            # precondition, so it may refine the typing but
+                            # must not reinstate the very verdict that was
+                            # withheld for lack of evidence.
+                            metadata["llm_overruled"] = withheld
+                            logger.info(
+                                "judgment proposed the withheld verdict %s for %s/%s; keeping %s",
+                                withheld, a_id, b_id, rtype.value,
+                            )
+                        else:
+                            rtype = judgment.relationship_type
                         if metadata.get("match_tier") == "weak":
                             # On the weak tier the open question is whether
                             # these are even the same claim, and the judge
