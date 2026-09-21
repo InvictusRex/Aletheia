@@ -12,6 +12,7 @@ from app.models.evidence import (
     make_evidence_id,
 )
 from app.models.fact import (
+    Comparability,
     ChunkUnit,
     EstimateStatus,
     EvidenceChunk,
@@ -34,6 +35,7 @@ from app.models.relationship import (
 
 __all__ = [
     "ChunkUnit",
+    "Comparability",
     "ContextComparison",
     "DimensionVerdict",
     "Document",

@@ -15,7 +15,7 @@ from datetime import date
 from enum import Enum
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class ValueKind(str, Enum):
@@ -44,6 +44,25 @@ class EstimateStatus(str, Enum):
 class FactStatus(str, Enum):
     CONFIRMED = "CONFIRMED"
     AMBIGUOUS = "AMBIGUOUS"
+
+
+class Comparability(str, Enum):
+    """How far a fact can participate in cross-document reasoning.
+
+    Numeric reasoning needs three things at once: a parsed number, a
+    canonical unit to compare it against, and a period saying when it
+    applies. A fact missing any of them is not merely lower quality --
+    it is unusable for the comparison the system exists to perform, and
+    one missing a period actively produces false contradictions because
+    an unknown period never blocks a disagreement.
+
+    Making this explicit is what separates "we extracted 3,900 facts"
+    from "we extracted 3,900 facts and can reason about 19% of them".
+    """
+
+    COMPARABLE = "COMPARABLE"
+    PARTIAL = "PARTIAL"
+    NOT_COMPARABLE = "NOT_COMPARABLE"
 
 
 class ChunkUnit(BaseModel):
@@ -133,3 +152,33 @@ class Fact(BaseModel):
     extraction_confidence: float = Field(ge=0.0, le=1.0)
     ambiguity_flags: list[str] = Field(default_factory=list)
     status: FactStatus = FactStatus.CONFIRMED
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def comparability(self) -> Comparability:
+        """Derived, never stored: recomputed whenever the fact is read.
+
+        Persisting it would let it drift from the columns it summarises
+        after a re-normalization.
+        """
+        has_number = self.normalized_number is not None
+        has_unit = bool(self.normalized_unit and self.normalized_unit.strip())
+        has_period = self.time_kind != TimeKind.UNKNOWN
+        if has_number and has_unit and has_period:
+            return Comparability.COMPARABLE
+        if has_number and (has_unit or has_period):
+            return Comparability.PARTIAL
+        return Comparability.NOT_COMPARABLE
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def missing_for_comparison(self) -> list[str]:
+        """Exactly what this fact lacks, so the gap is actionable."""
+        missing: list[str] = []
+        if self.normalized_number is None:
+            missing.append("number")
+        if not (self.normalized_unit and self.normalized_unit.strip()):
+            missing.append("unit")
+        if self.time_kind == TimeKind.UNKNOWN:
+            missing.append("period")
+        return missing

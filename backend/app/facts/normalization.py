@@ -56,7 +56,7 @@ from sqlalchemy.orm import Session
 from app.db import repositories
 from app.facts.canonicalization import apply_aliases, build_alias_map
 from app.facts.validator import parse_number, parse_time  # noqa: F401 -- reused by contract: validator owns parsing; normalization never re-parses.
-from app.models.fact import Fact, ValueKind
+from app.models.fact import Comparability, Fact, ValueKind
 
 # ---------------------------------------------------------------------------
 # Canonical units + divisors (generic lookup tables — no dataset-specific logic)
@@ -678,6 +678,10 @@ class NormalizationReport(BaseModel):
     facts_normalized: int = 0  # normalized_number set OR canonical name set
     facts_flagged: int = 0  # any ambiguity flag starting with "norm:"
     aliases_applied: int = 0  # abbreviation definitions mined from the corpus
+    comparable: int = 0  # number + canonical unit + typed period
+    partially_comparable: int = 0  # missing one of the three
+    not_comparable: int = 0  # cannot take part in numeric reasoning
+    missing_counts: dict[str, int] = {}  # what the gaps actually are
     errors: list[str] = []
 
 
@@ -729,4 +733,13 @@ def normalize_document_facts(session: Session, document_id: str) -> Normalizatio
             flag.startswith("norm:") for flag in (updated.ambiguity_flags or [])
         ):
             report.facts_flagged += 1
+        verdict = updated.comparability
+        if verdict == Comparability.COMPARABLE:
+            report.comparable += 1
+        elif verdict == Comparability.PARTIAL:
+            report.partially_comparable += 1
+        else:
+            report.not_comparable += 1
+        for gap in updated.missing_for_comparison:
+            report.missing_counts[gap] = report.missing_counts.get(gap, 0) + 1
     return report

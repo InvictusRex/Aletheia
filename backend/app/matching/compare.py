@@ -61,7 +61,7 @@ from __future__ import annotations
 
 import re
 
-from app.models.fact import EstimateStatus, Fact, TimeKind, ValueKind
+from app.models.fact import Comparability, EstimateStatus, Fact, TimeKind, ValueKind
 from app.models.relationship import (
     ContextComparison,
     DimensionVerdict,
@@ -466,6 +466,32 @@ def _same_claim(a: Fact, b: Fact) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _contradiction_blocked_reason(
+    a: Fact, b: Fact, ctx: ContextComparison
+) -> str | None:
+    """Why this pair may not be called a contradiction, or None.
+
+    Three preconditions, each learned from a false positive this system
+    actually produced:
+
+    * both sides must be COMPARABLE -- a fact without a canonical unit or
+      a typed period cannot support a numeric disagreement;
+    * the periods must be known AND equal -- an unknown period is not the
+      same period, it is no information;
+    * scope must be symmetric -- when one side says "standalone" and the
+      other says nothing, the pair may be about different things.
+    """
+    if a.comparability != Comparability.COMPARABLE:
+        return f"fact A is not comparable (missing: {', '.join(a.missing_for_comparison)})"
+    if b.comparability != Comparability.COMPARABLE:
+        return f"fact B is not comparable (missing: {', '.join(b.missing_for_comparison)})"
+    if ctx.dimensions.get("time") != _COMPATIBLE:
+        return "period not stated and equal on both sides"
+    if _present(a.scope_text) != _present(b.scope_text):
+        return "scope stated on only one side"
+    return None
+
+
 def _dim_display(dim: str, a: Fact, b: Fact) -> tuple[str, str]:
     """Raw display values for one dimension on each side."""
 
@@ -632,10 +658,11 @@ def classify(
         dim for dim in incompatible if dim not in ("entity", "predicate")
     ]
 
-    # PLAN 2.4 requires the SAME TIME for a contradiction, and an unknown
-    # period is not the same time -- it is no information. Without this,
-    # the same metric three years apart reads as a disagreement.
-    time_known_and_equal = ctx.dimensions.get("time") == _COMPATIBLE
+    # PLAN 2.4 requires the same entity, metric, TIME and compatible
+    # scope before two values may be called a disagreement. Everything
+    # this gate rejects is recorded as a withheld verdict rather than
+    # dropped, so the candidate stays inspectable.
+    blocked_reason = _contradiction_blocked_reason(a, b, ctx)
 
     if numeric_equivalent and not incompatible:
         if strong:
@@ -679,17 +706,17 @@ def classify(
             True,
         )
     if materially_different and not incompatible and strong:
-        if not time_known_and_equal:
-            # PLAN 2.4 requires the same time. An exact canonical match on
-            # entity and metric is not enough: "active customers 33,250
-            # (FY24)" and "7,900 (nine months ended December 2021)" are
-            # the same claim about different years, not a disagreement.
+        if blocked_reason is not None:
+            # An exact canonical match on entity and metric is not enough:
+            # "active customers 33,250 (FY24)" and "7,900 (nine months
+            # ended December 2021)" are the same claim about different
+            # years, not a disagreement.
             explanation = _explain(
                 "related", a, b, verdict, ctx, strong, overlap, True
             )
             metadata = _metadata(a, b, verdict, incompatible, unknown, strong, overlap)
             metadata["withheld_verdict"] = "CONTRADICTS"
-            metadata["withheld_reason"] = "period not stated on both sides"
+            metadata["withheld_reason"] = blocked_reason
             return (
                 RelationshipType.RELATED,
                 0.4,
@@ -709,7 +736,7 @@ def classify(
             False,
         )
     if materially_different and not context_incompatible and weak:
-        if not time_known_and_equal:
+        if blocked_reason is not None:
             explanation = _explain(
                 "related", a, b, verdict, ctx, strong, overlap, True
             )
@@ -717,7 +744,7 @@ def classify(
             metadata["claim_similarity"] = round(claim_similarity(a, b), 4)
             metadata["match_tier"] = "weak"
             metadata["withheld_verdict"] = "CONTRADICTS"
-            metadata["withheld_reason"] = "period not stated on both sides"
+            metadata["withheld_reason"] = blocked_reason
             return (
                 RelationshipType.RELATED,
                 0.4,
