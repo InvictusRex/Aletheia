@@ -133,3 +133,45 @@ def relationship_block_reason(
             "facts can never be typed."
         )
     return None
+
+
+def comparability_label(fact: dict) -> tuple[str, str]:
+    """(label, css class) for a fact's fitness for cross-document reasoning.
+
+    A fact missing a unit or a period cannot take part in numeric
+    comparison at all, so the workspace says which, rather than showing
+    it as an ordinary fact that simply never matches anything.
+    """
+    verdict = str(fact.get("comparability") or "")
+    missing = fact.get("missing_for_comparison") or []
+    if verdict == "COMPARABLE":
+        return "COMPARABLE", "badge-grn"
+    if verdict == "PARTIAL":
+        return f"PARTIAL — no {', '.join(missing)}", "badge-review"
+    if verdict == "NOT_COMPARABLE":
+        return f"NOT COMPARABLE — no {', '.join(missing)}", "badge-contra"
+    return "", ""
+
+
+def comparability_summary(facts: list[dict]) -> dict:
+    """Counts per verdict, so the honest quality of a run is visible."""
+    out = {"COMPARABLE": 0, "PARTIAL": 0, "NOT_COMPARABLE": 0}
+    for fact in facts:
+        verdict = str(fact.get("comparability") or "")
+        if verdict in out:
+            out[verdict] += 1
+    return out
+
+
+def withheld_note(rel: dict) -> str | None:
+    """The verdict the deterministic layer refused to assert, and why.
+
+    Without surfacing this a withheld contradiction is indistinguishable
+    from a pair the system never considered.
+    """
+    meta = rel.get("reasoning_metadata") or {}
+    verdict = meta.get("withheld_verdict")
+    if not verdict:
+        return None
+    reason = meta.get("withheld_reason") or "precondition not met"
+    return f"{verdict} withheld — {reason}"

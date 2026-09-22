@@ -160,3 +160,46 @@ def test_relationship_block_reason_names_the_missing_step():
     assert "have facts but none" in reason
     single = scope.relationship_block_reason(True, 12, ["x.pdf"])
     assert "has facts but none" in single
+
+
+def test_comparability_label_names_what_is_missing():
+    assert scope.comparability_label(
+        {"comparability": "COMPARABLE", "missing_for_comparison": []}
+    ) == ("COMPARABLE", "badge-grn")
+    label, _cls = scope.comparability_label(
+        {"comparability": "PARTIAL", "missing_for_comparison": ["period"]}
+    )
+    assert "period" in label
+    label, _cls = scope.comparability_label(
+        {"comparability": "NOT_COMPARABLE", "missing_for_comparison": ["unit", "period"]}
+    )
+    assert "unit" in label and "period" in label
+
+
+def test_comparability_label_is_blank_when_absent():
+    assert scope.comparability_label({}) == ("", "")
+
+
+def test_comparability_summary_counts_each_verdict():
+    facts = [
+        {"comparability": "COMPARABLE"},
+        {"comparability": "COMPARABLE"},
+        {"comparability": "PARTIAL"},
+        {},
+    ]
+    assert scope.comparability_summary(facts) == {
+        "COMPARABLE": 2, "PARTIAL": 1, "NOT_COMPARABLE": 0
+    }
+
+
+def test_withheld_note_explains_a_refused_verdict():
+    note = scope.withheld_note({"reasoning_metadata": {
+        "withheld_verdict": "CONTRADICTS",
+        "withheld_reason": "scope stated on only one side",
+    }})
+    assert note == "CONTRADICTS withheld — scope stated on only one side"
+
+
+def test_withheld_note_is_none_for_an_ordinary_relationship():
+    assert scope.withheld_note({"reasoning_metadata": {}}) is None
+    assert scope.withheld_note({}) is None

@@ -698,8 +698,13 @@ def _rel_badge(rel: dict) -> str:
     review = ""
     if rel.get("status") == "NEEDS_REVIEW":
         review = ' <span class="badge badge-review">NEEDS REVIEW</span>'
+    withheld = scope_util.withheld_note(rel)
+    withheld_html = (
+        f'<br><span class="conf">{_esc(withheld)}</span>' if withheld else ""
+    )
     return (f'<span class="badge {cls}">{_esc(rtype)}</span>{review} '
-            f'<span class="conf">{_fmt_conf(rel.get("confidence"))}</span>')
+            f'<span class="conf">{_fmt_conf(rel.get("confidence"))}</span>'
+            f'{withheld_html}')
 
 
 def _fact_summary(fact: dict, doc_names: dict) -> str:
@@ -887,6 +892,10 @@ def _render_fact_block(fact: dict, doc_name: str, evidence_by_id: dict, key: str
     scope_html = f" · {_esc(scope)}" if scope else ""
     geo = fact.get("geography") or ""
     geo_html = f" · {_esc(geo)}" if geo else ""
+    label, label_cls = scope_util.comparability_label(fact)
+    comp_html = (
+        f' <span class="badge {label_cls}">{_esc(label)}</span>' if label else ""
+    )
     selected = st.session_state.selected_fact_id == str(fact.get("id"))
     border = ' style="border-left-color: #E2A52C;"' if selected else ""
     st.markdown(
@@ -898,7 +907,7 @@ def _render_fact_block(fact: dict, doc_name: str, evidence_by_id: dict, key: str
         f'<div class="fact-meta"><b>{_esc(fact.get("time_text") or "time unknown")}</b>'
         f" · {_fmt_conf(fact.get('extraction_confidence'))} confidence"
         f"{scope_html}{geo_html}<br>{_esc(doc_name)} · "
-        f"{_esc(_fact_page_label(fact, evidence_by_id))}</div>"
+        f"{_esc(_fact_page_label(fact, evidence_by_id))}{comp_html}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -926,6 +935,8 @@ def _render_fact_evidence(fact: dict, doc_name: str, evidence_by_id: dict) -> No
             "confidence": fact.get("extraction_confidence"),
             "status": fact.get("status"),
             "ambiguity_flags": fact.get("ambiguity_flags") or [],
+            "comparability": fact.get("comparability"),
+            "missing_for_comparison": fact.get("missing_for_comparison") or [],
             "document": doc_name,
         }
         st.json(detail)
