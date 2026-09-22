@@ -182,24 +182,36 @@
   ],
   "deviations_from_plan": [
     {
-      "id": "deviation-001-frontend-deferred",
-      "plan_reference": "docs/PLAN.md#55 Phase 0 (frontend skeleton)",
-      "reason": "Maintainer instruction: backend first, do not scaffold frontend yet.",
+      "id": "deviation-002-streamlit-frontend",
+      "plan_reference": "docs/PLAN.md#28 (React/Vite/Tailwind)",
+      "reason": "Streamlit prototype chosen deliberately; the backend knowledge layer is the core assignment.",
+      "status": "accepted"
+    },
+    {
+      "id": "deviation-003-weak-match-tier",
+      "plan_reference": "docs/PLAN.md#20 relationship classification",
+      "reason": "strong_match requires exact canonical equality, which independently extracted documents essentially never produce. A reviewable weak tier was added; its verdicts are never asserted.",
+      "status": "accepted"
+    },
+    {
+      "id": "deviation-004-semantic-normalization",
+      "plan_reference": "docs/PLAN.md#10.2 / #10.3 (LLM entity and predicate normalization)",
+      "reason": "Implemented deterministically instead: abbreviations and self-reference are mined from the documents' own definitions, so the layer generalizes to unseen PDFs without an LLM call.",
       "status": "accepted"
     }
   ],
   "implementation_state": {
-    "phase": "backend-feature-complete",
-    "testing": "pytest 259 passed (backend incl. ML-service boundary, ingestion, facts, matching, search + ml-service endpoints)",
-    "vector_extension": "pgvector enabled via migration; fact_embeddings + relationships live; no ANN index (exact scan at prototype scale)",
     "notes": [
-      "Backend feature-complete for core assignment (Phases 0-10); Streamlit frontend implemented (frontend/app.py).",
-      "Live POST /search verified: ranked facts with evidence/provenance, document filtering, read-only.",
-      "torch 2.14.0+cpu, CUDA unavailable, MiniLM dim 384 verified in-container.",
-      "LLM providers are Groq (default, openai/gpt-oss-120b) plus a local Ollama option (LLM_PROVIDER=ollama); live Groq fact + judgment smoke tests passed.",
-      "Groq request management: serial one-chunk-per-request, 2.5s start spacing, temperature 0, 2000 max output tokens, 5 bounded retries honoring Retry-After.",
-      "Next: macro acceptance dataset run."
-    ]
+      "Comparability (COMPARABLE/PARTIAL/NOT_COMPARABLE) is a derived Fact property, never stored, so it cannot drift from the columns it summarises.",
+      "A contradiction requires both sides COMPARABLE, an agreed period, and symmetric scope; every rejection is recorded as withheld_verdict with a reason.",
+      "Candidate discovery is exhaustive below matching_exhaustive_max_pairs; top-k is only a scale guard.",
+      "Abbreviations are mined from each corpus's own definitions; corporate self-reference is mined per document and never shared across documents.",
+      "Frontend surfaces comparability, missing_for_comparison and withheld verdicts.",
+      "LLM providers remain pluggable (Groq / Ollama); the demo knowledge layer was built without invoking either."
+    ],
+    "phase": "architecture-corrected; knowledge layer rebuilt",
+    "testing": "pytest 436 passed (backend incl. comparability, canonicalization, matching tiers, frontend helpers)",
+    "vector_extension": "pgvector enabled; fact_embeddings + relationships live; exact scan at prototype scale"
   },
   "invariants": [
     "No evidence means no fact.",
@@ -408,10 +420,40 @@
       "path": "backend/tests/test_rate_limit.py",
       "responsibility": "Serial pacing/backoff/Retry-After unit tests with fake clocks; JSON clean/repair tests; provider retry tests with faked SDK; no network or real sleeps.",
       "type": "testing"
+    },
+    {
+      "id": "comparability",
+      "type": "component"
+    },
+    {
+      "id": "canonicalization",
+      "type": "component"
+    },
+    {
+      "id": "streamlit-frontend",
+      "type": "interface"
+    },
+    {
+      "id": "match-tiers",
+      "type": "component"
     }
   ],
   "phases": {
-    "current": "backend-feature-complete",
+    "completed_backend_phases": [
+      "phase-0",
+      "phase-1",
+      "phase-2",
+      "phase-3",
+      "phase-4",
+      "phase-5",
+      "phase-6",
+      "phase-7",
+      "phase-8",
+      "phase-9",
+      "phase-10"
+    ],
+    "current": "architecture-corrected",
+    "next": "phase-13-readme-and-demo",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -431,23 +473,8 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "phase-12-evaluation",
       "phase-13-demo"
-    ],
-    "completed_backend_phases": [
-      "phase-0",
-      "phase-1",
-      "phase-2",
-      "phase-3",
-      "phase-4",
-      "phase-5",
-      "phase-6",
-      "phase-7",
-      "phase-8",
-      "phase-9",
-      "phase-10"
-    ],
-    "next": "phase-12-evaluation"
+    ]
   },
   "relationships": [
     {

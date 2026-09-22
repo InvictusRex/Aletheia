@@ -6,12 +6,11 @@ user overrides for the current task.
 
 ## 1. Code comments
 
-- NEVER add `#`-style code comments to any file, in any language.
-- NEVER add `"""` / `'''` docstrings or any other comment convention.
-  No comments, period. Code must be self-explanatory through names
-  and structure.
-- When rewriting a region, remove any comments/docstrings inside it.
-  Do not strip comments elsewhere as drive-by churn.
+- Comment WHY, never WHAT. A comment that restates the code is noise.
+- Module and function docstrings ARE expected: they carry the contract,
+  the invariant, or the reason a rule exists (for example why an unknown
+  period must never be read as agreement).
+- Do not annotate obvious code. Do not leave commented-out code.
 
 ## 2. Git commits
 
