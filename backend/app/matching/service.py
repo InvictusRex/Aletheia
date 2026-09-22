@@ -138,6 +138,7 @@ def discover_candidates(
     top_k: int,
     floor: float,
     exhaustive_max_pairs: int | None = None,
+    include_same_document: bool = False,
 ) -> list[tuple[UUID, UUID, float]]:
     """Cross-document candidate pairs with deterministic order.
 
@@ -147,19 +148,30 @@ def discover_candidates(
     smaller than ``exhaustive_max_pairs`` this returns every pair and
     skips ranking, so recall is complete and top-k degrades to a pure
     scale guard. Similarity still never classifies anything.
+
+    ``include_same_document`` also pairs facts drawn from one document.
+    Off by default, because a single document restates its own figures
+    constantly (a table and the prose describing it), but a document
+    that contradicts ITSELF is invisible without it.
     """
     doc_ids = {f.id for f in doc_facts}
+
+    def eligible(query: Fact, cand: Fact) -> bool:
+        if cand.id == query.id:
+            return False
+        if include_same_document:
+            # Same-document pairs are allowed, but each unordered pair
+            # must still be offered once.
+            return str(cand.id) > str(query.id) or cand.id not in doc_ids
+        return cand.id not in doc_ids and cand.document_id != query.document_id
     candidate_space = sum(
-        1
-        for query in doc_facts
-        for cand in pool
-        if cand.id not in doc_ids and cand.document_id != query.document_id
+        1 for query in doc_facts for cand in pool if eligible(query, cand)
     )
     if exhaustive_max_pairs is not None and candidate_space <= exhaustive_max_pairs:
         every: set[tuple[UUID, UUID]] = set()
         for query in doc_facts:
             for cand in pool:
-                if cand.id in doc_ids or cand.document_id == query.document_id:
+                if not eligible(query, cand):
                     continue
                 every.add(_ordered(query.id, cand.id))
         # Score 1.0 for every pair: nothing was ranked, so no pair is
@@ -174,7 +186,7 @@ def discover_candidates(
     for query in doc_facts:
         scored: list[tuple[UUID, float]] = []
         for cand in pool:
-            if cand.id in doc_ids or cand.document_id == query.document_id:
+            if not eligible(query, cand):
                 continue
             if vector_mode:
                 scored.append((cand.id, None))  # placeholder, ranked below
@@ -221,6 +233,7 @@ def run_matching_for_document(
     transport: GroqJudgmentTransport | OllamaJudgmentTransport | None = None,
     compare_with: list[UUID] | None = None,
     recompute: bool = False,
+    include_same_document: bool = False,
 ) -> MatchingReport:
     """Discover candidates for one document's facts and classify them.
 
@@ -251,6 +264,7 @@ def run_matching_for_document(
         settings.matching_top_k,
         settings.matching_similarity_floor,
         settings.matching_exhaustive_max_pairs,
+        include_same_document,
     )
     by_id = {f.id: f for f in pool}
     bundles: dict[str, list[EvidenceUnit]] = {}

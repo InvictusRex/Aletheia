@@ -1698,3 +1698,20 @@ def test_exhaustive_discovery_never_pairs_a_fact_with_its_own_document():
     )
     for a, b, _score in pairs:
         assert not (a in ids_a and b in ids_a)
+
+
+def test_same_document_pairs_are_excluded_by_default():
+    doc = uuid4()
+    facts = [_mk_fact(doc, [uuid4()]) for _ in range(4)]
+    assert discover_candidates(facts, facts, {}, 10, 0.25, 10_000) == []
+
+
+def test_include_same_document_surfaces_self_contradiction_candidates():
+    """A document that contradicts itself is invisible without this."""
+    doc = uuid4()
+    facts = [_mk_fact(doc, [uuid4()]) for _ in range(4)]
+    pairs = discover_candidates(
+        facts, facts, {}, 10, 0.25, 10_000, include_same_document=True
+    )
+    assert len(pairs) == 6, "every unordered pair, offered once"
+    assert len({(a, b) for a, b, _ in pairs}) == 6

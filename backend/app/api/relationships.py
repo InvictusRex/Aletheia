@@ -44,6 +44,11 @@ def trigger_matching(
         description="Bound the candidate side to these document ids; "
         "omit to compare against every other document",
     ),
+    include_same_document: bool = Query(
+        default=False,
+        description="Also compare facts drawn from the same document, so "
+        "a document that contradicts itself becomes visible",
+    ),
     recompute: bool = Query(
         default=False,
         description="Re-classify already-stored pairs and overwrite their "
@@ -55,7 +60,11 @@ def trigger_matching(
         raise HTTPException(status_code=404, detail="document not found")
     try:
         report = run_matching_for_document(
-            db, document_id, compare_with=compare_with, recompute=recompute
+            db,
+            document_id,
+            compare_with=compare_with,
+            recompute=recompute,
+            include_same_document=include_same_document,
         )
         db.commit()
     except Exception as exc:

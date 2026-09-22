@@ -54,7 +54,12 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db import repositories
-from app.facts.canonicalization import apply_aliases, build_alias_map
+from app.facts.canonicalization import (
+    apply_aliases,
+    build_alias_map,
+    build_self_reference_map,
+    mine_self_reference,
+)
 from app.facts.validator import parse_number, parse_time  # noqa: F401 -- reused by contract: validator owns parsing; normalization never re-parses.
 from app.models.fact import Comparability, Fact, ValueKind
 
@@ -682,6 +687,7 @@ class NormalizationReport(BaseModel):
     partially_comparable: int = 0  # missing one of the three
     not_comparable: int = 0  # cannot take part in numeric reasoning
     missing_counts: dict[str, int] = {}  # what the gaps actually are
+    self_reference: str | None = None  # the entity this document calls itself
     errors: list[str] = []
 
 
@@ -712,6 +718,23 @@ def normalize_document_facts(session: Session, document_id: str) -> Normalizatio
     except Exception as exc:  # alias mining must never fail normalization
         report.errors.append(f"alias mining failed: {type(exc).__name__}: {exc}")
         aliases = {}
+
+    # Self-reference is mined from THIS document only: every filing's
+    # "the Company" is a different company, so sharing the map across a
+    # corpus would merge two unrelated issuers into one entity.
+    try:
+        bundle = repositories.get_document_bundle(session, doc_uuid)
+        own_texts = [e.text for e in bundle[2]] if bundle else []
+        issuer = mine_self_reference(own_texts)
+        report.self_reference = _canonical_name(issuer) if issuer else None
+        aliases = {
+            **aliases,
+            **build_self_reference_map(own_texts, report.self_reference),
+        }
+    except Exception as exc:  # never fail normalization over this
+        report.errors.append(
+            f"self-reference mining failed: {type(exc).__name__}: {exc}"
+        )
     report.aliases_applied = len(aliases)
 
     for fact in facts:

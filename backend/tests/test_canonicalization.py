@@ -111,3 +111,51 @@ def test_normalize_fact_applies_the_alias_map():
     out = normalize_fact(fact, {"gfcf": "gross fixed capital formation"})
     assert out.canonical_subject == "gross fixed capital formation"
     assert out.subject == "GFCF", "raw fields are never rewritten"
+
+
+# ---------------------------------------------------------------------------
+# Self-reference: the entity a document calls itself
+# ---------------------------------------------------------------------------
+
+
+def test_mines_the_issuer_from_its_own_definition():
+    from app.facts.canonicalization import mine_self_reference
+
+    assert mine_self_reference(
+        ['Delhivery Limited (\u201cCompany\u201d) reported strong growth.']
+    ) == "delhivery limited"
+
+
+def test_leading_prose_is_dropped_from_the_issuer_name():
+    """A definition is usually embedded in a sentence; only its tail
+    names the organisation."""
+    from app.facts.canonicalization import mine_self_reference
+
+    assert mine_self_reference(
+        ['approved by the shareholders of Delhivery Limited (the \u201cCompany\u201d)']
+    ) == "delhivery limited"
+
+
+def test_a_document_that_never_names_itself_yields_nothing():
+    from app.facts.canonicalization import mine_self_reference
+
+    assert mine_self_reference(["Real GDP grew by 6.5 percent."]) is None
+
+
+def test_self_reference_map_points_generic_words_at_the_issuer():
+    from app.facts.canonicalization import build_self_reference_map
+
+    mapping = build_self_reference_map([], "delhivery")
+    assert mapping["company"] == "delhivery"
+    assert mapping["we"] == "delhivery"
+    assert mapping["our"] == "delhivery"
+    assert "delhivery" not in mapping, "the issuer must not map to itself"
+
+
+def test_no_issuer_means_no_self_reference_mapping():
+    """Two different issuers both reducing to "company" would look like
+    one entity, so an unknown issuer maps nothing."""
+    from app.facts.canonicalization import build_self_reference_map
+
+    assert build_self_reference_map([], None) == {}
+    assert build_self_reference_map([], "  ") == {}

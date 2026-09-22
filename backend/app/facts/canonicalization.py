@@ -35,9 +35,12 @@ from collections import Counter
 
 __all__ = [
     "MIN_ABBREVIATION_LENGTH",
+    "SELF_REFERENCE_NOUNS",
     "apply_aliases",
     "build_alias_map",
+    "build_self_reference_map",
     "mine_alias_pairs",
+    "mine_self_reference",
 ]
 
 #: Single letters are far too ambiguous to treat as a definition.
@@ -163,3 +166,104 @@ def apply_aliases(name: str | None, aliases: dict[str, str]) -> str | None:
         rewritten.extend(aliases.get(token, token).split())
     collapsed = _collapse_adjacent_repeats(rewritten)
     return _WS_RE.sub(" ", " ".join(collapsed)).strip() or name
+
+
+#: Generic nouns an organisation uses for itself. These are ordinary
+#: English reference words, not names from any particular corpus, so a
+#: filing by any issuer uses the same handful.
+SELF_REFERENCE_NOUNS = frozenset(
+    {
+        "company",
+        "group",
+        "bank",
+        "corporation",
+        "issuer",
+        "fund",
+        "trust",
+        "partnership",
+        "firm",
+        "society",
+        "authority",
+        "parent",
+    }
+)
+
+#: Pronouns and possessives a filing uses for itself.
+_SELF_PRONOUNS = frozenset({"we", "us", "our", "ours"})
+
+#: ``Some Entity Name ("Company")`` / ``Some Entity Name (the "Company")``.
+_SELF_DEFINITION_RE = re.compile(
+    r"([A-Z][A-Za-z&.,\-]*(?:\s+[A-Za-z&.,\-]+){0,6})"
+    r"\s*\(\s*(?:the\s+)?[“‘\"']?"
+    r"(%s)"
+    r"[”’\"']?\s*(?:/|\))" % "|".join(sorted(SELF_REFERENCE_NOUNS))
+    ,
+    re.IGNORECASE,
+)
+
+
+def _trailing_proper_name(name: str) -> str | None:
+    """The trailing run of capitalised words, which is the entity itself.
+
+    A definition is usually embedded in prose ("approved by the
+    shareholders of Delhivery Limited (the “Company”)"), and only the
+    tail of it names the organisation. Anchoring on the trailing
+    capitalised run drops the verb phrase without needing to know any
+    particular company or verb.
+    """
+    words = name.split()
+    kept: list[str] = []
+    for word in reversed(words):
+        if word[:1].isupper():
+            kept.append(word)
+            continue
+        break
+    if not kept:
+        return None
+    return " ".join(reversed(kept))
+
+
+def mine_self_reference(texts: list[str]) -> str | None:
+    """The entity a document calls itself, from its own definition.
+
+    A filing states this explicitly -- ``Delhivery Limited ("Company")``
+    -- so the issuer is mined the same way abbreviations are, rather
+    than guessed from a filename or a title. Returns the most frequently
+    defined name, or ``None`` when the document never names itself.
+
+    Scope is deliberately ONE document: every filing's "the Company" is
+    a different company, so this map must never be shared across a
+    corpus the way an abbreviation glossary can be.
+    """
+    counts: Counter[str] = Counter()
+    for text in texts:
+        if not text or "(" not in text:
+            continue
+        for name, _noun in _SELF_DEFINITION_RE.findall(text.replace("\n", " ")):
+            proper = _trailing_proper_name(name)
+            if proper:
+                counts[_clean(proper)] += 1
+    if not counts:
+        return None
+    return min(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+
+
+def build_self_reference_map(
+    texts: list[str], canonical_issuer: str | None
+) -> dict[str, str]:
+    """Map self-reference words to the document's own canonical issuer.
+
+    Without this every "the Company" and "We" is an anonymous entity
+    that can never match the issuer's real name in another document --
+    and worse, two different issuers both reduce to "company" and look
+    like the same entity.
+    """
+    if not canonical_issuer or not canonical_issuer.strip():
+        return {}
+    _ = texts  # the caller mines the issuer; kept for call-site symmetry
+    target = canonical_issuer.strip()
+    return {
+        word: target
+        for word in sorted(SELF_REFERENCE_NOUNS | _SELF_PRONOUNS)
+        if word != target
+    }
