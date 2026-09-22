@@ -181,25 +181,35 @@ def discover_candidates(
             for a, b in sorted(every, key=lambda p: (str(p[0]), str(p[1])))
         ]
 
-    vector_mode = all(f.id in vectors for f in pool)
     pairs: list[tuple[UUID, UUID, float]] = []
     for query in doc_facts:
-        scored: list[tuple[UUID, float]] = []
-        for cand in pool:
-            if not eligible(query, cand):
-                continue
-            if vector_mode:
-                scored.append((cand.id, None))  # placeholder, ranked below
-            else:
-                scored.append((cand.id, lexical_score(query, cand)))
-        if vector_mode:
-            pool_vecs = [
-                (fid, vectors[fid]) for fid, _ in scored if fid in vectors
+        eligible_ids = [cand.id for cand in pool if eligible(query, cand)]
+        # Vector ranking is decided PER QUERY, not for the whole run: a
+        # single fact without an embedding used to drop every comparison
+        # to the lexical path, discarding vectors that were available
+        # for everything else.
+        query_vec = vectors.get(query.id)
+        pool_vecs = [
+            (fid, vectors[fid]) for fid in eligible_ids if fid in vectors
+        ]
+        if query_vec is not None and pool_vecs:
+            ranked = rank_candidates(query.id, query_vec, pool_vecs, top_k, floor)
+            ranked_ids = {fid for fid, _ in ranked}
+            # Anything without a vector still gets a lexical chance
+            # rather than being silently unreachable.
+            by_id = {f.id: f for f in pool}
+            leftover = [
+                (fid, lexical_score(query, by_id[fid]))
+                for fid in eligible_ids
+                if fid not in vectors and fid not in ranked_ids
             ]
-            ranked = rank_candidates(
-                query.id, vectors[query.id], pool_vecs, top_k, floor
-            )
+            leftover.sort(key=lambda item: (-item[1], str(item[0])))
+            ranked = ranked + [(f, s) for f, s in leftover if s >= floor][
+                : max(0, top_k - len(ranked))
+            ]
         else:
+            by_id = {f.id: f for f in pool}
+            scored = [(fid, lexical_score(query, by_id[fid])) for fid in eligible_ids]
             scored.sort(key=lambda item: (-item[1], str(item[0])))
             ranked = [(fid, s) for fid, s in scored if s >= floor][:top_k]
         for fid, score in ranked:

@@ -1715,3 +1715,19 @@ def test_include_same_document_surfaces_self_contradiction_candidates():
     )
     assert len(pairs) == 6, "every unordered pair, offered once"
     assert len({(a, b) for a, b, _ in pairs}) == 6
+
+
+def test_one_missing_vector_no_longer_drops_the_whole_run_to_lexical():
+    """Regression: vector_mode was all-or-nothing, so a single fact
+    without an embedding discarded every vector in the run."""
+    doc_a, doc_b = uuid4(), uuid4()
+    left = [_mk_fact(doc_a, [uuid4()])]
+    right = [_mk_fact(doc_b, [uuid4()]) for _ in range(3)]
+    vectors = {left[0].id: [1.0, 0.0], right[0].id: [1.0, 0.0], right[1].id: [0.9, 0.1]}
+    # right[2] deliberately has no vector.
+    pairs = discover_candidates(
+        left, left + right, vectors, top_k=10, floor=0.0, exhaustive_max_pairs=0
+    )
+    assert pairs, "vector-ranked candidates must still be produced"
+    reached = {b for _a, b, _s in pairs} | {a for a, _b, _s in pairs}
+    assert right[0].id in reached
