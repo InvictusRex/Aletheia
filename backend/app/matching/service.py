@@ -137,15 +137,38 @@ def discover_candidates(
     vectors: dict[UUID, list[float]],
     top_k: int,
     floor: float,
+    exhaustive_max_pairs: int | None = None,
 ) -> list[tuple[UUID, UUID, float]]:
-    """Cross-document top-k candidate pairs with deterministic order.
+    """Cross-document candidate pairs with deterministic order.
 
-    Vector ranking when both sides have vectors, else lexical scoring.
-    Unknown fields never eliminate candidates; the floor and top-k bound
-    the comparison space (never all-pairs).
+    Ranking exists to bound the comparison space, but it also hides
+    valid pairs: a correct partner that falls outside a fact's top-k is
+    never compared at all. When the whole cross-document space is
+    smaller than ``exhaustive_max_pairs`` this returns every pair and
+    skips ranking, so recall is complete and top-k degrades to a pure
+    scale guard. Similarity still never classifies anything.
     """
-    by_id = {f.id: f for f in pool}
     doc_ids = {f.id for f in doc_facts}
+    candidate_space = sum(
+        1
+        for query in doc_facts
+        for cand in pool
+        if cand.id not in doc_ids and cand.document_id != query.document_id
+    )
+    if exhaustive_max_pairs is not None and candidate_space <= exhaustive_max_pairs:
+        every: set[tuple[UUID, UUID]] = set()
+        for query in doc_facts:
+            for cand in pool:
+                if cand.id in doc_ids or cand.document_id == query.document_id:
+                    continue
+                every.add(_ordered(query.id, cand.id))
+        # Score 1.0 for every pair: nothing was ranked, so no pair is
+        # preferred over another and the score carries no meaning here.
+        return [
+            (a, b, 1.0)
+            for a, b in sorted(every, key=lambda p: (str(p[0]), str(p[1])))
+        ]
+
     vector_mode = all(f.id in vectors for f in pool)
     pairs: list[tuple[UUID, UUID, float]] = []
     for query in doc_facts:
@@ -227,6 +250,7 @@ def run_matching_for_document(
         vectors,
         settings.matching_top_k,
         settings.matching_similarity_floor,
+        settings.matching_exhaustive_max_pairs,
     )
     by_id = {f.id: f for f in pool}
     bundles: dict[str, list[EvidenceUnit]] = {}

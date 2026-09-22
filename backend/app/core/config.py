@@ -76,6 +76,12 @@ class Settings(BaseSettings):
 
     # Candidate discovery + relationship reasoning (deterministic-first).
     matching_top_k: int = Field(default=10)
+    # Ranking bounds the comparison space at scale, but it also HIDES
+    # valid pairs: a correct partner outside a fact's top-k is never
+    # compared at all. Below this many candidate pairs the run compares
+    # everything and ranking is skipped entirely, so small corpora get
+    # exhaustive recall and top-k stays purely a scale guard.
+    matching_exhaustive_max_pairs: int = Field(default=250_000)
     matching_similarity_floor: float = Field(default=0.25)
     matching_numeric_tolerance: float = Field(default=0.01)
     matching_embedding_model: str = Field(

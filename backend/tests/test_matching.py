@@ -1657,3 +1657,44 @@ def test_strong_contradiction_also_requires_an_agreed_period():
     rtype, _c, _e, meta, _n = classify(a, b)
     assert rtype != RelationshipType.CONTRADICTS
     assert meta.get("withheld_verdict") == "CONTRADICTS"
+
+
+# ---------------------------------------------------------------------------
+# Exhaustive discovery: ranking must not hide valid pairs on small corpora
+# ---------------------------------------------------------------------------
+
+
+def test_small_corpora_compare_every_cross_document_pair():
+    """top_k=10 silently drops a correct partner ranked 11th. Below the
+    exhaustive threshold nothing is ranked and recall is complete."""
+    doc_a, doc_b = uuid4(), uuid4()
+    left = [_mk_fact(doc_a, [uuid4()]) for _ in range(5)]
+    right = [_mk_fact(doc_b, [uuid4()]) for _ in range(20)]
+    pairs = discover_candidates(
+        left, left + right, {}, top_k=10, floor=0.25,
+        exhaustive_max_pairs=10_000,
+    )
+    assert len(pairs) == 5 * 20, "every cross-document pair must be offered"
+    assert all(len(p) == 3 for p in pairs), "callers unpack (a, b, score)"
+
+
+def test_top_k_still_applies_above_the_exhaustive_threshold():
+    doc_a, doc_b = uuid4(), uuid4()
+    left = [_mk_fact(doc_a, [uuid4()]) for _ in range(5)]
+    right = [_mk_fact(doc_b, [uuid4()]) for _ in range(20)]
+    pairs = discover_candidates(
+        left, left + right, {}, top_k=3, floor=0.0, exhaustive_max_pairs=10,
+    )
+    assert len(pairs) < 5 * 20
+
+
+def test_exhaustive_discovery_never_pairs_a_fact_with_its_own_document():
+    doc_a, doc_b = uuid4(), uuid4()
+    left = [_mk_fact(doc_a, [uuid4()]) for _ in range(3)]
+    right = [_mk_fact(doc_b, [uuid4()]) for _ in range(3)]
+    ids_a = {f.id for f in left}
+    pairs = discover_candidates(
+        left, left + right, {}, top_k=10, floor=0.25, exhaustive_max_pairs=10_000,
+    )
+    for a, b, _score in pairs:
+        assert not (a in ids_a and b in ids_a)
