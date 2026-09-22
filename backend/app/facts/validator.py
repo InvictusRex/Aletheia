@@ -77,6 +77,17 @@ _MDY_RE = re.compile(
 # whether the source means a calendar or a fiscal year, so it is typed
 # without dates and compared on its text alone.
 _BARE_YEAR_RE = re.compile(r"^(\d{4})$")
+# "year ended March 31, 2024", "nine months period ended December 31, 2021",
+# "three months ended 30 June 2024". A reporting period named by its end
+# date is a real period: typing it is what lets a financial statement's
+# own wording be compared at all. Dateless, because the span implied by
+# "year"/"nine months" still depends on the reporting convention.
+_PERIOD_ENDED_RE = re.compile(
+    r"^(?:for\s+the\s+)?(?:[a-z]+[-\s])*"
+    r"(?:year|quarter|half|months?|period)"
+    r"(?:\s+period)?\s+end(?:ed|ing).*\d{4}\s*$",
+    re.IGNORECASE,
+)
 # A quarter may name its year in several conventions: "Q1", "Q1 FY24",
 # "Q1 FY2025/26", "Q1:2024-25", "Q2 2024-25". Failing to type one leaves
 # the period UNKNOWN, and UNKNOWN never blocks a contradiction -- so an
@@ -190,7 +201,7 @@ def parse_time(text: str | None) -> tuple[TimeKind, date | None, date | None]:
         year, month = int(m.group(2)), _MONTHS[m.group(1).lower()]
         last = calendar.monthrange(year, month)[1]
         return TimeKind.DATE, date(year, month, 1), date(year, month, last)
-    if _RANGE_RE.match(s) or _BARE_YEAR_RE.match(s):
+    if _RANGE_RE.match(s) or _BARE_YEAR_RE.match(s) or _PERIOD_ENDED_RE.match(s):
         return TimeKind.RANGE, None, None
     return TimeKind.UNKNOWN, None, None
 

@@ -1348,3 +1348,27 @@ def test_a_quarter_and_a_half_year_are_different_periods():
     assert compare_context(quarter, half).dimensions["time"] == (
         DimensionVerdict.INCOMPATIBLE
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "nine months period ended December 31, 2021",
+        "year ended March 31, 2024",
+        "three months ended 30 June 2024",
+        "for the year ended March 31, 2023",
+        "quarter ended June 30, 2024",
+    ],
+)
+def test_parse_time_types_a_period_named_by_its_end_date(text):
+    """Financial statements name periods by when they ended. Leaving
+    those UNKNOWN makes a statement's own wording uncomparable, and an
+    unknown period never blocks a contradiction."""
+    kind, start, end = parse_time(text)
+    assert kind == TimeKind.RANGE
+    assert start is None and end is None, "the span depends on convention"
+
+
+@pytest.mark.parametrize("text", ["ended", "period", "ended 2024", "year"])
+def test_parse_time_rejects_period_fragments(text):
+    assert parse_time(text)[0] == TimeKind.UNKNOWN
