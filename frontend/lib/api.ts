@@ -1,5 +1,5 @@
 /**
- * Every call to the Aletheia backend. Mirrors frontend/api.py: each helper
+ * Every call to the Aletheia backend. Each helper
  * returns [data, error] so a page never has to decide what a thrown error
  * means, and never invents data when the backend fails.
  */

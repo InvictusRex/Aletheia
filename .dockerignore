@@ -1,0 +1,26 @@
+# Every service builds from the repo root, so this is the only
+# .dockerignore Docker reads — a per-directory one is never consulted.
+.git
+.github
+.venv
+venv
+docs
+README.md
+AGENTS.md
+LICENSE
+
+# Secrets never enter an image; compose injects them as environment.
+.env
+.env.local
+
+# Host build output. node_modules in particular must NOT reach the
+# frontend image: it is installed for the host platform and would
+# overwrite the Linux install that `npm ci` just produced.
+**/node_modules
+**/.next
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/*.tsbuildinfo

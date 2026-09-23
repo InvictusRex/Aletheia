@@ -15,9 +15,10 @@ imported here to keep this module dependency-free):
   convention as ``EvidenceUnit.bbox``;
 - ``OcrBlock.confidence`` maps to ``EvidenceUnit.extraction_quality``.
 
-Provider-abstraction pattern follows docs/PLAN.md sections 5 (canonical
-evidence layer: PyMuPDF / pdfplumber / OCR all converge) and 13 (small
-``Protocol`` interface with swappable concrete providers).
+The canonical evidence layer is the point: PyMuPDF, pdfplumber and OCR
+all converge on ``EvidenceUnit``, so a small ``Protocol`` with swappable
+concrete providers is enough and downstream code never branches on which
+extractor produced a unit.
 """
 
 from __future__ import annotations

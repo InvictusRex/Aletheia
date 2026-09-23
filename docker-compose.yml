@@ -67,17 +67,18 @@ services:
     expose:
       - "8001"
 
-  # Next.js workspace (replaces the Streamlit prototype).
-  web:
+  # Next.js workspace: the review UI. The browser calls the backend
+  # directly, so nothing proxies through this container.
+  frontend:
     build:
       context: .
-      dockerfile: web/Dockerfile
+      dockerfile: frontend/Dockerfile
       args:
         # Baked into the client bundle: the browser calls the published
         # host port directly, not the compose network name.
         NEXT_PUBLIC_ALETHEIA_API_URL: ${NEXT_PUBLIC_ALETHEIA_API_URL:-http://localhost:8000}
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - backend
 

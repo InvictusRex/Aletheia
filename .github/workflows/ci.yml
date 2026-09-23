@@ -20,7 +20,7 @@ jobs:
       - run: pytest
         working-directory: backend
 
-  web:
+  frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +28,8 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-        working-directory: web
+        working-directory: frontend
       - run: npm run build
-        working-directory: web
+        working-directory: frontend

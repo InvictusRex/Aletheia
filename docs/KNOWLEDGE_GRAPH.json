@@ -3,32 +3,32 @@
     {
       "description": "Every fact must reference source evidence; unsupported LLM claims are rejected, never stored as truth.",
       "id": "constraint-evidence-first",
-      "source": "docs/PLAN.md#42"
+      "source": "design spec §42"
     },
     {
       "description": "Never overwrite original source values with normalized values; retain both.",
       "id": "constraint-preserve-original",
-      "source": "docs/PLAN.md#43"
+      "source": "design spec §43"
     },
     {
       "description": "Use deterministic code for arithmetic, unit conversion, and comparison; LLMs handle semantics only.",
       "id": "constraint-deterministic-first",
-      "source": "docs/PLAN.md#11"
+      "source": "design spec §11"
     },
     {
       "description": "Embeddings are for candidate discovery, never final truth determination.",
       "id": "constraint-embeddings-discovery",
-      "source": "docs/PLAN.md#15"
+      "source": "design spec §15"
     },
     {
       "description": "Starter datasets stay outside the repo at ../starter-datasets; no dataset-specific production logic.",
       "id": "constraint-no-hardcoded-datasets",
-      "source": "docs/PLAN.md#36"
+      "source": "design spec §36"
     },
     {
       "description": "No Neo4j/Redis/Kafka/Celery/Kubernetes without a demonstrated need.",
       "id": "constraint-no-extra-infra",
-      "source": "docs/PLAN.md#24"
+      "source": "design spec §24"
     }
   ],
   "decisions": [
@@ -49,7 +49,7 @@
     {
       "date": "2026-09-08",
       "id": "decision-003-json-kg",
-      "rationale": "Maintainer requested machine-readable JSON with stable node/relationship IDs at docs/PROJECT_KNOWLEDGE_GRAPH.json.",
+      "rationale": "Maintainer requested machine-readable JSON with stable node/relationship IDs at docs/KNOWLEDGE_GRAPH.json.",
       "status": "accepted",
       "title": "Knowledge graph representation: JSON"
     },
@@ -178,25 +178,39 @@
       "rationale": "Reliable real inference over throughput: one chunk per request, single worker, 2.5s start spacing; deterministic 4xx never retried; no batching, no token scheduling.",
       "status": "accepted",
       "title": "Serial Groq extraction with interval pacing and bounded backoff"
+    },
+    {
+      "date": "2026-09-23",
+      "id": "decision-022-nextjs-workspace",
+      "rationale": "Streamlit could not express the review surface: a landing page, document-scoped workspace, facts browser with evidence provenance, and a relationship view showing both sides beside their rendered source pages. The browser now calls the API directly, which is why CORS became necessary.",
+      "status": "accepted",
+      "title": "Next.js workspace replaces the Streamlit prototype"
+    },
+    {
+      "date": "2026-09-23",
+      "id": "decision-023-ci",
+      "rationale": "Two jobs, no service containers: the backend suite runs entirely on fakes and needs no database, and `next build` type-checks, so a separate tsc step would only repeat it.",
+      "status": "accepted",
+      "title": "CI runs backend tests and a production frontend build"
     }
   ],
   "deviations_from_plan": [
     {
-      "id": "deviation-002-streamlit-frontend",
-      "plan_reference": "docs/PLAN.md#28 (React/Vite/Tailwind)",
-      "reason": "Streamlit prototype chosen deliberately; the backend knowledge layer is the core assignment.",
+      "id": "deviation-002-nextjs-frontend",
+      "reason": "Next.js App Router with Tailwind v4 instead of React/Vite: same component model, but file-system routing and a production build in one toolchain. A Streamlit prototype served the earlier phases and was removed once the review surface outgrew it.",
+      "spec_reference": "design spec §28 (React/Vite/Tailwind)",
       "status": "accepted"
     },
     {
       "id": "deviation-003-weak-match-tier",
-      "plan_reference": "docs/PLAN.md#20 relationship classification",
       "reason": "strong_match requires exact canonical equality, which independently extracted documents essentially never produce. A reviewable weak tier was added; its verdicts are never asserted.",
+      "spec_reference": "design spec §20 relationship classification",
       "status": "accepted"
     },
     {
       "id": "deviation-004-semantic-normalization",
-      "plan_reference": "docs/PLAN.md#10.2 / #10.3 (LLM entity and predicate normalization)",
       "reason": "Implemented deterministically instead: abbreviations and self-reference are mined from the documents' own definitions, so the layer generalizes to unseen PDFs without an LLM call.",
+      "spec_reference": "design spec §10.2 / #10.3 (LLM entity and predicate normalization)",
       "status": "accepted"
     }
   ],
@@ -206,11 +220,12 @@
       "A contradiction requires both sides COMPARABLE, an agreed period, and symmetric scope; every rejection is recorded as withheld_verdict with a reason.",
       "Candidate discovery is exhaustive below matching_exhaustive_max_pairs; top-k is only a scale guard.",
       "Abbreviations are mined from each corpus's own definitions; corporate self-reference is mined per document and never shared across documents.",
-      "Frontend surfaces comparability, missing_for_comparison and withheld verdicts.",
-      "LLM providers remain pluggable (Groq / Ollama); the demo knowledge layer was built without invoking either."
+      "The frontend surfaces comparability, missing_for_comparison and withheld verdicts; it renders the evidence bounding box on the page it came from.",
+      "LLM providers remain pluggable (Groq / Ollama); the demo knowledge layer was built without invoking either.",
+      "Compose brings up db + ml + backend + frontend; the backend applies Alembic migrations at startup behind the database healthcheck."
     ],
-    "phase": "architecture-corrected; knowledge layer rebuilt",
-    "testing": "pytest 436 passed (backend incl. comparability, canonicalization, matching tiers, frontend helpers)",
+    "phase": "deployment-ready",
+    "testing": "pytest 421 passed (backend); frontend verified by a production `next build` in CI",
     "vector_extension": "pgvector enabled; fact_embeddings + relationships live; exact scan at prototype scale"
   },
   "invariants": [
@@ -225,21 +240,23 @@
   ],
   "nodes": [
     {
-      "id": "fastapi-app",
-      "path": "backend/app/main.py",
-      "responsibility": "Application factory (create_app) and router wiring. No business logic.",
+      "id": "candidate-discovery",
+      "path": "backend/app/matching/embeddings.py",
+      "responsibility": "MiniLM-384 ranking plus lexical fallback; scores order candidates only, never classify.",
       "type": "component"
     },
     {
-      "id": "health-api",
-      "path": "backend/app/api/health.py",
-      "responsibility": "GET /health. Returns app status plus nested database reachability.",
-      "type": "interface"
+      "id": "canonicalization",
+      "type": "component"
     },
     {
-      "id": "settings",
-      "path": "backend/app/core/config.py",
-      "responsibility": "pydantic-settings environment config: database URL, LLM placeholder, local OCR and table toggles, dataset dir.",
+      "id": "ci-workflow",
+      "path": ".github/workflows/ci.yml",
+      "responsibility": "GitHub Actions: backend pytest on 3.12 and a production frontend build on Node 22, on push to main and every pull request.",
+      "type": "infrastructure"
+    },
+    {
+      "id": "comparability",
       "type": "component"
     },
     {
@@ -249,45 +266,10 @@
       "type": "component"
     },
     {
-      "id": "postgres-pgvector",
-      "responsibility": "Relational + vector storage via pgvector/pgvector:pg16 service (db). Persistent volume pgdata.",
-      "type": "infrastructure"
-    },
-    {
       "id": "docker-compose",
       "path": "docker-compose.yml",
       "responsibility": "Reproducible local setup: db + backend + ml + frontend services, env-based config.",
       "type": "infrastructure"
-    },
-    {
-      "id": "pytest-suite",
-      "path": "backend/tests/test_health.py",
-      "responsibility": "Behavior tests: import/startup, /health 200 + shape incl. database distinction.",
-      "type": "testing"
-    },
-    {
-      "id": "evidence-models",
-      "path": "backend/app/models/",
-      "responsibility": "Canonical Pydantic contracts: Document, Page, EvidenceUnit, enums, deterministic evidence IDs.",
-      "type": "component"
-    },
-    {
-      "id": "pymupdf-extractor",
-      "path": "backend/app/extraction/pymupdf.py",
-      "responsibility": "Native PDF backbone: text blocks + bboxes, metadata, image signals, best-effort page labels.",
-      "type": "component"
-    },
-    {
-      "id": "quality-assessor",
-      "path": "backend/app/extraction/quality.py",
-      "responsibility": "Deterministic GOOD/BAD scoring; BAD flags NEEDS_OCR for Phase 3.",
-      "type": "component"
-    },
-    {
-      "id": "ingestion-pipeline",
-      "path": "backend/app/extraction/pipeline.py",
-      "responsibility": "Pure bytes-to-bundle orchestration with explicit FAILED/PARTIAL handling; adds table evidence additively, TEXT untouched.",
-      "type": "component"
     },
     {
       "id": "documents-api",
@@ -296,9 +278,15 @@
       "type": "interface"
     },
     {
-      "id": "persistence",
-      "path": "backend/app/db/models.py + repositories.py + backend/alembic/",
-      "responsibility": "documents/pages/evidence_units tables, Alembic migrations, save/load bundle.",
+      "id": "evidence-batching",
+      "path": "backend/app/facts/service.py",
+      "responsibility": "Serial one-chunk-per-request orchestration with provider selection (Groq/Ollama) and per-chunk persistence; token-aware batching removed.",
+      "type": "component"
+    },
+    {
+      "id": "evidence-models",
+      "path": "backend/app/models/",
+      "responsibility": "Canonical Pydantic contracts: Document, Page, EvidenceUnit, enums, deterministic evidence IDs.",
       "type": "component"
     },
     {
@@ -308,27 +296,21 @@
       "type": "testing"
     },
     {
-      "id": "table-extractor",
-      "path": "backend/app/extraction/tables.py",
-      "responsibility": "pdfplumber structured tables behind PyMuPDF candidate gating; emits TABLE + TABLE_CELL evidence additively.",
-      "type": "component"
-    },
-    {
-      "id": "ocr-fallback",
-      "path": "backend/app/extraction/ocr_provider.py + paddle_ocr.py",
-      "responsibility": "Local PaddleOCR fallback behind OcrProvider protocol; BAD pages only, native preserved, OCR_TEXT appended; oneDNN disabled (Paddle CPU PIR incompatibility).",
-      "type": "component"
-    },
-    {
       "id": "fact-models",
       "path": "backend/app/models/fact.py",
       "responsibility": "Canonical Fact/FactDraft/Chunk contracts: typed values, time/scope/context, evidence linkage, confidence.",
       "type": "component"
     },
     {
-      "id": "llm-provider",
-      "path": "backend/app/llm/provider.py + groq.py + ollama.py",
-      "responsibility": "Sync LLM transport abstraction; Groq adapter on the groq SDK with strict JSON Schema output, retries, lazy SDK; Ollama adapter for local inference, selected via LLM_PROVIDER.",
+      "id": "fact-normalization",
+      "path": "backend/app/facts/normalization.py",
+      "responsibility": "Deterministic value/unit/time/name canonicalization into reserved columns; flags-only uncertainty, no migration.",
+      "type": "component"
+    },
+    {
+      "id": "fact-persistence",
+      "path": "backend/app/db fact rows + fact_evidence link + alembic rev ae0679862c94",
+      "responsibility": "facts + fact_evidence tables; two-phase flush for FK ordering on PostgreSQL.",
       "type": "component"
     },
     {
@@ -344,75 +326,72 @@
       "type": "interface"
     },
     {
-      "id": "fact-persistence",
-      "path": "backend/app/db fact rows + fact_evidence link + alembic rev ae0679862c94",
-      "responsibility": "facts + fact_evidence tables; two-phase flush for FK ordering on PostgreSQL.",
+      "id": "fastapi-app",
+      "path": "backend/app/main.py",
+      "responsibility": "Application factory (create_app) and router wiring. No business logic.",
       "type": "component"
     },
     {
-      "id": "fact-normalization",
-      "path": "backend/app/facts/normalization.py",
-      "responsibility": "Deterministic value/unit/time/name canonicalization into reserved columns; flags-only uncertainty, no migration.",
-      "type": "component"
-    },
-    {
-      "id": "candidate-discovery",
-      "path": "backend/app/matching/embeddings.py",
-      "responsibility": "MiniLM-384 ranking plus lexical fallback; scores order candidates only, never classify.",
-      "type": "component"
-    },
-    {
-      "id": "relationship-reasoning",
-      "path": "backend/app/matching/compare.py + service.py",
-      "responsibility": "Tri-state context comparison, tolerance-explicit numeric verdicts, frozen precedence classifier, staged orchestration.",
-      "type": "component"
-    },
-    {
-      "id": "relationship-llm",
-      "path": "backend/app/llm/judgment.py",
-      "responsibility": "Structured judgment for ambiguous pairs only; precomputed verdicts passed in, NEEDS_REVIEW fallback. Transport now Groq.",
-      "type": "component"
-    },
-    {
-      "id": "relationship-api",
-      "path": "backend/app/api/relationships.py",
-      "responsibility": "Explicit generation trigger plus filtered listing and provenance detail endpoints.",
+      "id": "health-api",
+      "path": "backend/app/api/health.py",
+      "responsibility": "GET /health. Returns app status plus nested database reachability.",
       "type": "interface"
     },
     {
-      "id": "relationship-persistence",
-      "path": "backend/app/db relationship rows + fact_embeddings + alembic rev f42014770cfa",
-      "responsibility": "Ordered-pair unique relationships, embedding store with SQLite variant, pgvector on PostgreSQL.",
+      "id": "ingestion-pipeline",
+      "path": "backend/app/extraction/pipeline.py",
+      "responsibility": "Pure bytes-to-bundle orchestration with explicit FAILED/PARTIAL handling; adds table evidence additively, TEXT untouched.",
       "type": "component"
     },
     {
-      "id": "search-service",
-      "path": "backend/app/search/service.py",
-      "responsibility": "Retrieval-only knowledge search: independent lexical/vector discovery, deterministic merge/ranking, read-only, no LLM.",
+      "id": "llm-provider",
+      "path": "backend/app/llm/provider.py + groq.py + ollama.py",
+      "responsibility": "Sync LLM transport abstraction; Groq adapter on the groq SDK with strict JSON Schema output, retries, lazy SDK; Ollama adapter for local inference, selected via LLM_PROVIDER.",
       "type": "component"
     },
     {
-      "id": "search-api",
-      "path": "backend/app/api/search.py",
-      "responsibility": "POST /search with SearchRequest/SearchResponse; 400 on blank query; returns facts with provenance.",
+      "id": "match-tiers",
+      "type": "component"
+    },
+    {
+      "id": "nextjs-frontend",
+      "path": "frontend/",
+      "responsibility": "Next.js App Router review UI: landing, document workspace, facts browser, relationship detail with rendered evidence pages. Calls the API from the browser; holds no business logic.",
       "type": "interface"
     },
     {
-      "id": "search-tests",
-      "path": "backend/tests/test_search.py",
-      "responsibility": "Search behavior/contract tests with faked embeddings; no network or keys.",
+      "id": "ocr-fallback",
+      "path": "backend/app/extraction/ocr_provider.py + paddle_ocr.py",
+      "responsibility": "Local PaddleOCR fallback behind OcrProvider protocol; BAD pages only, native preserved, OCR_TEXT appended; oneDNN disabled (Paddle CPU PIR incompatibility).",
+      "type": "component"
+    },
+    {
+      "id": "persistence",
+      "path": "backend/app/db/models.py + repositories.py + backend/alembic/",
+      "responsibility": "documents/pages/evidence_units tables, Alembic migrations, save/load bundle.",
+      "type": "component"
+    },
+    {
+      "id": "postgres-pgvector",
+      "responsibility": "Relational + vector storage via pgvector/pgvector:pg16 service (db). Persistent volume pgdata.",
+      "type": "infrastructure"
+    },
+    {
+      "id": "pymupdf-extractor",
+      "path": "backend/app/extraction/pymupdf.py",
+      "responsibility": "Native PDF backbone: text blocks + bboxes, metadata, image signals, best-effort page labels.",
+      "type": "component"
+    },
+    {
+      "id": "pytest-suite",
+      "path": "backend/tests/test_health.py",
+      "responsibility": "Behavior tests: import/startup, /health 200 + shape incl. database distinction.",
       "type": "testing"
     },
     {
-      "id": "request-pacing",
-      "path": "backend/app/llm/rate_limit.py",
-      "responsibility": "Serial 2.5s start-interval pacing (no token scheduling), bounded exponential backoff with Retry-After; injected fakes in tests.",
-      "type": "component"
-    },
-    {
-      "id": "evidence-batching",
-      "path": "backend/app/facts/service.py",
-      "responsibility": "Serial one-chunk-per-request orchestration with provider selection (Groq/Ollama) and per-chunk persistence; token-aware batching removed.",
+      "id": "quality-assessor",
+      "path": "backend/app/extraction/quality.py",
+      "responsibility": "Deterministic GOOD/BAD scoring; BAD flags NEEDS_OCR for Phase 3.",
       "type": "component"
     },
     {
@@ -422,19 +401,63 @@
       "type": "testing"
     },
     {
-      "id": "comparability",
-      "type": "component"
-    },
-    {
-      "id": "canonicalization",
-      "type": "component"
-    },
-    {
-      "id": "streamlit-frontend",
+      "id": "relationship-api",
+      "path": "backend/app/api/relationships.py",
+      "responsibility": "Explicit generation trigger plus filtered listing and provenance detail endpoints.",
       "type": "interface"
     },
     {
-      "id": "match-tiers",
+      "id": "relationship-llm",
+      "path": "backend/app/llm/judgment.py",
+      "responsibility": "Structured judgment for ambiguous pairs only; precomputed verdicts passed in, NEEDS_REVIEW fallback. Transport now Groq.",
+      "type": "component"
+    },
+    {
+      "id": "relationship-persistence",
+      "path": "backend/app/db relationship rows + fact_embeddings + alembic rev f42014770cfa",
+      "responsibility": "Ordered-pair unique relationships, embedding store with SQLite variant, pgvector on PostgreSQL.",
+      "type": "component"
+    },
+    {
+      "id": "relationship-reasoning",
+      "path": "backend/app/matching/compare.py + service.py",
+      "responsibility": "Tri-state context comparison, tolerance-explicit numeric verdicts, frozen precedence classifier, staged orchestration.",
+      "type": "component"
+    },
+    {
+      "id": "request-pacing",
+      "path": "backend/app/llm/rate_limit.py",
+      "responsibility": "Serial 2.5s start-interval pacing (no token scheduling), bounded exponential backoff with Retry-After; injected fakes in tests.",
+      "type": "component"
+    },
+    {
+      "id": "search-api",
+      "path": "backend/app/api/search.py",
+      "responsibility": "POST /search with SearchRequest/SearchResponse; 400 on blank query; returns facts with provenance.",
+      "type": "interface"
+    },
+    {
+      "id": "search-service",
+      "path": "backend/app/search/service.py",
+      "responsibility": "Retrieval-only knowledge search: independent lexical/vector discovery, deterministic merge/ranking, read-only, no LLM.",
+      "type": "component"
+    },
+    {
+      "id": "search-tests",
+      "path": "backend/tests/test_search.py",
+      "responsibility": "Search behavior/contract tests with faked embeddings; no network or keys.",
+      "type": "testing"
+    },
+    {
+      "id": "settings",
+      "path": "backend/app/core/config.py",
+      "responsibility": "pydantic-settings environment config: database URL, LLM placeholder, local OCR and table toggles, dataset dir.",
+      "type": "component"
+    },
+    {
+      "id": "table-extractor",
+      "path": "backend/app/extraction/tables.py",
+      "responsibility": "pdfplumber structured tables behind PyMuPDF candidate gating; emits TABLE + TABLE_CELL evidence additively.",
       "type": "component"
     }
   ],
@@ -452,8 +475,8 @@
       "phase-9",
       "phase-10"
     ],
-    "current": "architecture-corrected",
-    "next": "phase-13-readme-and-demo",
+    "current": "deployment-ready",
+    "next": "demo recording",
     "phase_0_scope": [
       "Python 3.12",
       "FastAPI skeleton",
@@ -473,7 +496,7 @@
     ],
     "phase_1_status": "complete",
     "upcoming": [
-      "phase-13-demo"
+      "demo recording"
     ]
   },
   "relationships": [
@@ -751,6 +774,16 @@
       "source": "rate-limit-tests",
       "target": "evidence-batching",
       "type": "covers"
+    },
+    {
+      "source": "nextjs-frontend",
+      "target": "fastapi-app",
+      "type": "calls"
+    },
+    {
+      "source": "docker-compose",
+      "target": "nextjs-frontend",
+      "type": "orchestrates"
     }
   ],
   "schema_version": "1.0"
