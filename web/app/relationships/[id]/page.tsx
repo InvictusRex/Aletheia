@@ -32,7 +32,7 @@ export default function RelationshipPage({
   const meta = rel.reasoning_metadata ?? {};
 
   return (
-    <div>
+    <div className="pb-24">
       <Link
         href="/relationships"
         className="mb-3 inline-block text-xs text-muted hover:text-accent"

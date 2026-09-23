@@ -1,142 +1,79 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import {
-  health, listDocuments, listFacts, listRelationships,
-  runNormalize, runRelationships, uploadPdf, type Doc,
-} from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { EyeLogo } from "@/components/EyeLogo";
+import { listDocuments, listFacts } from "@/lib/api";
 
-type Stats = { facts: number; comparable: number; relationships: number };
-
-export default function Workspace() {
-  const [docs, setDocs] = useState<Doc[]>([]);
-  const [stats, setStats] = useState<Record<string, Stats>>({});
+export default function Landing() {
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [stats, setStats] = useState<{ docs: number; facts: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [db, setDb] = useState<string>("checking");
 
-  const refresh = useCallback(async () => {
-    const [h] = await health();
-    setDb(h?.database?.reachable ? "connected" : "unreachable");
-    const [list, err] = await listDocuments();
-    if (err) return setError(err);
-    setError(null);
-    setDocs(list ?? []);
-    const next: Record<string, Stats> = {};
-    await Promise.all(
-      (list ?? []).map(async (d) => {
-        const [facts] = await listFacts(d.id);
-        const [rels] = await listRelationships(d.id);
-        next[d.id] = {
-          facts: facts?.length ?? 0,
-          comparable: (facts ?? []).filter((f) => f.comparability === "COMPARABLE").length,
-          relationships: rels?.length ?? 0,
-        };
-      }),
-    );
-    setStats(next);
+  useEffect(() => {
+    void (async () => {
+      const [docs, err] = await listDocuments();
+      if (err) return setError(err);
+      const counts = await Promise.all(
+        (docs ?? []).map(async (d) => (await listFacts(d.id))[0]?.length ?? 0),
+      );
+      setStats({
+        docs: docs?.length ?? 0,
+        facts: counts.reduce((a, b) => a + b, 0),
+      });
+    })();
   }, []);
 
-  useEffect(() => { void refresh(); }, [refresh]);
-
-  const run = async (label: string, fn: () => Promise<unknown>) => {
-    setBusy(label);
-    await fn();
-    await refresh();
-    setBusy(null);
+  const go = () => {
+    const q = query.trim();
+    router.push(q ? `/facts?q=${encodeURIComponent(q)}` : "/facts");
   };
-
-  const onUpload = async (files: FileList | null) => {
-    if (!files?.length) return;
-    await run("Uploading", async () => {
-      for (const file of Array.from(files)) {
-        const [, err] = await uploadPdf(file);
-        if (err) setError(err);
-      }
-    });
-  };
-
-  const total = Object.values(stats).reduce(
-    (acc, s) => ({
-      facts: acc.facts + s.facts,
-      comparable: acc.comparable + s.comparable,
-      relationships: acc.relationships + s.relationships,
-    }),
-    { facts: 0, comparable: 0, relationships: 0 },
-  );
 
   return (
-    <div>
-      {error && <div className="surface mb-4 border-l-2 border-l-red p-3 text-sm">{error}</div>}
-
-      <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-        {[
-          ["Documents", docs.length],
-          ["Facts", total.facts],
-          ["Comparable", total.comparable],
-          ["Relationships", total.relationships],
-        ].map(([label, value]) => (
-          <div key={label as string} className="surface p-4">
-            <div className="label">{label as string}</div>
-            <div className="mt-1 text-3xl font-bold">{value as number}</div>
+    <div className="flex min-h-[calc(100vh-4rem)] flex-col items-center justify-center px-4">
+      <div className="w-full max-w-2xl space-y-8 text-center">
+        <div className="space-y-4">
+          <div className="flex justify-center">
+            <EyeLogo className="h-32 w-56 text-accent md:h-36 md:w-64" />
           </div>
-        ))}
-      </div>
-
-      <div className="surface mb-6 p-4">
-        <div className="label mb-2">Upload PDFs</div>
-        <input
-          type="file"
-          accept="application/pdf"
-          multiple
-          onChange={(e) => void onUpload(e.target.files)}
-          className="block w-full text-sm file:mr-3 file:rounded file:border file:border-[#3a3128] file:bg-transparent file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-foreground hover:file:border-accent"
-        />
-        <div className="mt-2 text-xs text-muted">
-          Database {db}. Ingestion extracts pages and evidence; facts are extracted on demand.
+          <h1 className="text-5xl font-bold tracking-tight text-accent md:text-6xl">
+            ALETHEIA
+          </h1>
+          <p className="text-4xl font-bold tracking-tight text-accent md:text-5xl">
+            Fact Knowledge Layer
+          </p>
+          <p className="text-lg text-muted">
+            Every fact grounded in the page it came from
+          </p>
         </div>
-      </div>
 
-      <div className="label mb-2">Documents</div>
-      {docs.map((doc) => {
-        const s = stats[doc.id];
-        return (
-          <div key={doc.id} className="surface mb-2 flex flex-wrap items-center gap-4 p-3">
-            <div className="min-w-[280px] flex-1">
-              <div className="font-semibold break-words">{doc.filename}</div>
-              <div className="text-xs text-muted">
-                {doc.page_count} pages · {doc.ingestion_status}
-              </div>
-            </div>
-            <div className="text-xs text-muted">
-              {s ? `${s.facts} facts · ${s.comparable} comparable · ${s.relationships} relationships` : "…"}
-            </div>
-            <div className="flex gap-2">
-              <button
-                disabled={busy !== null}
-                onClick={() => void run("Normalizing", () => runNormalize(doc.id))}
-                className="rounded border border-[#3a3128] px-3 py-1.5 text-xs font-semibold tracking-wider hover:border-accent hover:text-accent disabled:opacity-40"
-              >
-                NORMALIZE
-              </button>
-              <button
-                disabled={busy !== null || (s?.comparable ?? 0) === 0}
-                title={(s?.comparable ?? 0) === 0 ? "Normalize first — relationships compare normalized values" : ""}
-                onClick={() => void run("Matching", () => runRelationships(doc.id, true))}
-                className="rounded border border-[#3a3128] px-3 py-1.5 text-xs font-semibold tracking-wider hover:border-accent hover:text-accent disabled:opacity-40"
-              >
-                MATCH
-              </button>
-            </div>
+        <div className="relative">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") go();
+            }}
+            placeholder="Search facts, entities, metrics..."
+            className="w-full rounded-xl border border-accent/30 bg-card px-5 py-4 text-lg outline-none transition-colors placeholder:text-muted focus:border-accent"
+          />
+        </div>
+
+        {error && <p className="text-sm text-red">{error}</p>}
+
+        {stats && (
+          <p className="text-sm text-muted/60">
+            {stats.facts.toLocaleString()} facts across {stats.docs} documents
+          </p>
+        )}
+        {!stats && !error && (
+          <div className="flex items-center justify-center gap-2 text-muted">
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <span>Reading the knowledge layer...</span>
           </div>
-        );
-      })}
-      {busy && <div className="mt-3 text-xs text-accent">{busy}…</div>}
-      {docs.length === 0 && !error && (
-        <div className="surface p-6 text-center text-sm text-muted">
-          No documents yet. Upload a PDF to start.
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

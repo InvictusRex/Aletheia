@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   title: "Aletheia — Fact Knowledge Layer",
   description:
     "Extracts facts from PDFs, grounds each in source evidence, and reconciles them across documents.",
+  icons: { icon: "/eye.svg" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -15,7 +16,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen antialiased">
         <BackgroundSquares />
         <Nav />
-        <main className="relative z-10 mx-auto max-w-[1480px] px-6 pb-24">{children}</main>
+        <main className="relative z-10 mx-auto max-w-[90rem] px-4 pt-16">
+          {children}
+        </main>
       </body>
     </html>
   );

@@ -3,17 +3,22 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Drifting grid behind the app. Canvas rather than CSS because a DOM grid
- * at this density costs a layout pass per frame.
+ * Drifting grid behind the app.
+ *
+ * Sits at z-0 rather than a negative z-index: a negative one paints
+ * behind the root background, which is opaque black, so the grid was
+ * invisible. Content stacks above it instead.
  */
 export function BackgroundSquares({
   speed = 0.35,
   size = 40,
   color = "#e2a52c",
+  opacity = 0.22,
 }: {
   speed?: number;
   size?: number;
   color?: string;
+  opacity?: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -24,9 +29,16 @@ export function BackgroundSquares({
 
     let frame = 0;
     let offset = 0;
+
+    // Match the backing store to the device pixel ratio, otherwise a
+    // 0.5px line on a HiDPI screen renders as a blurry smear.
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * dpr);
+      canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
     resize();
     window.addEventListener("resize", resize);
@@ -35,23 +47,26 @@ export function BackgroundSquares({
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      ctx.clearRect(0, 0, w, h);
       if (!still) offset = (offset + speed) % size;
-      const start = -size + offset;
+
       ctx.strokeStyle = color;
-      ctx.lineWidth = 0.5;
-      ctx.globalAlpha = 0.13;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = opacity;
       ctx.beginPath();
-      for (let x = start; x < canvas.width + size; x += size) {
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
+      for (let x = -size + offset; x < w + size; x += size) {
+        ctx.moveTo(Math.round(x) + 0.5, 0);
+        ctx.lineTo(Math.round(x) + 0.5, h);
       }
-      for (let y = start; y < canvas.height + size; y += size) {
-        ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
+      for (let y = -size + offset; y < h + size; y += size) {
+        ctx.moveTo(0, Math.round(y) + 0.5);
+        ctx.lineTo(w, Math.round(y) + 0.5);
       }
       ctx.stroke();
       ctx.globalAlpha = 1;
+
       if (!still) frame = requestAnimationFrame(draw);
     };
     draw();
@@ -60,7 +75,13 @@ export function BackgroundSquares({
       window.removeEventListener("resize", resize);
       cancelAnimationFrame(frame);
     };
-  }, [speed, size, color]);
+  }, [speed, size, color, opacity]);
 
-  return <canvas ref={ref} className="fixed inset-0 -z-10 bg-black" />;
+  return (
+    <canvas
+      ref={ref}
+      aria-hidden="true"
+      className="pointer-events-none fixed inset-0 z-0"
+    />
+  );
 }

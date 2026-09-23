@@ -2,35 +2,45 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { EyeLogo } from "@/components/EyeLogo";
 
 const LINKS = [
-  ["/", "WORKSPACE"],
-  ["/facts", "FACTS"],
-  ["/relationships", "RELATIONSHIPS"],
-] as const;
+  { href: "/workspace", label: "Workspace" },
+  { href: "/facts", label: "Facts" },
+  { href: "/relationships", label: "Relationships" },
+];
 
 export function Nav() {
   const path = usePathname();
   return (
-    <header className="relative z-20 mx-auto mb-6 flex max-w-[1480px] items-end justify-between border-b border-line px-6 pt-5 pb-3">
-      <div>
-        <div className="text-[22px] font-bold tracking-[0.22em]">ALETHEIA</div>
-        <div className="label mt-1">Fact knowledge layer</div>
+    <nav className="fixed inset-x-0 top-0 z-50 border-b border-accent/30 bg-black/80 backdrop-blur-md">
+      <div className="mx-auto flex h-16 max-w-[90rem] items-center justify-between px-4">
+        <Link
+          href="/"
+          className="flex items-center gap-2 text-accent transition-colors hover:text-accent/80"
+        >
+          <EyeLogo className="h-9 w-16" />
+          <span className="text-xl font-bold tracking-[0.18em]">ALETHEIA</span>
+        </Link>
+        <div className="flex items-center gap-1">
+          {LINKS.map(({ href, label }) => {
+            const active = path === href || path.startsWith(`${href}/`);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className={`rounded-lg px-4 py-2 text-[15px] font-semibold transition-all duration-200 ${
+                  active
+                    ? "bg-accent text-black"
+                    : "text-foreground/70 hover:bg-accent/10 hover:text-accent"
+                }`}
+              >
+                {label}
+              </Link>
+            );
+          })}
+        </div>
       </div>
-      <nav className="flex gap-6 text-xs font-semibold tracking-[0.14em]">
-        {LINKS.map(([href, label]) => {
-          const active = href === "/" ? path === "/" : path.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={active ? "text-accent" : "text-muted hover:text-foreground"}
-            >
-              {label}
-            </Link>
-          );
-        })}
-      </nav>
-    </header>
+    </nav>
   );
 }

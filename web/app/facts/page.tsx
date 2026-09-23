@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { FactCard } from "@/components/FactCard";
 import {
   getBundle,
@@ -12,12 +13,13 @@ import {
   type Fact,
 } from "@/lib/api";
 
-export default function Facts() {
+function FactsInner() {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [facts, setFacts] = useState<Fact[]>([]);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
-  const [query, setQuery] = useState("");
+  const params = useSearchParams();
+  const [query, setQuery] = useState(params.get("q") ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +33,15 @@ export default function Facts() {
   }, []);
 
   useEffect(() => {
+    const incoming = params.get("q");
+    if (incoming && selected) void runSearch(incoming);
+    // Only when the landing page hands us a query.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
+  useEffect(() => {
     if (!selected) return;
+    if (params.get("q")) return;
     void (async () => {
       setLoading(true);
       const [f, fe] = await listFacts(selected);
@@ -43,10 +53,11 @@ export default function Facts() {
     })();
   }, [selected]);
 
-  const runSearch = async () => {
-    if (!query.trim()) return;
+  const runSearch = async (override?: string) => {
+    const q = (override ?? query).trim();
+    if (!q) return;
     setLoading(true);
-    const [res, err] = await search(query.trim(), selected || undefined);
+    const [res, err] = await search(q, selected || undefined);
     setError(err);
     setFacts((res?.hits ?? []).map((h) => h.fact));
     setEvidence((res?.hits ?? []).flatMap((h) => h.evidence));
@@ -60,7 +71,7 @@ export default function Facts() {
   }, {});
 
   return (
-    <div>
+    <div className="pb-24">
       <div className="surface mb-4 flex flex-wrap items-center gap-3 p-3">
         <select
           value={selected}
@@ -106,5 +117,14 @@ export default function Facts() {
         <FactCard key={f.id} fact={f} docName={docName} evidence={evidence} />
       ))}
     </div>
+  );
+}
+
+
+export default function Facts() {
+  return (
+    <Suspense fallback={<div className="text-sm text-accent">Loading</div>}>
+      <FactsInner />
+    </Suspense>
   );
 }

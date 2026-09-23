@@ -56,7 +56,7 @@ export default function Relationships() {
   }, {});
 
   return (
-    <div>
+    <div className="pb-24">
       <div className="mb-4 flex flex-wrap gap-2">
         {TYPES.map((t) => (
           <button
