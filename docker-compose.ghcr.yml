@@ -1,0 +1,88 @@
+# Run Aletheia from published images, without a checkout or a build.
+#
+#   curl -O https://raw.githubusercontent.com/InvictusRex/Aletheia/main/docker-compose.ghcr.yml
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# Then open http://localhost:3000. The API is reached through the frontend
+# at /api on the same origin, so only one port needs publishing and no
+# cross-origin request is ever made.
+#
+# Everything has a working default; nothing here is a secret. Extraction
+# is the one feature that needs configuring, because it calls a model:
+# set GROQ_API_KEY, or point LLM_PROVIDER=ollama at a running Ollama.
+# Ingestion, normalization, matching and search all work without it.
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aletheia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aletheia}
+      POSTGRES_DB: ${POSTGRES_DB:-aletheia}
+    volumes:
+      - ${PGDATA_PATH:-pgdata}:/var/lib/postgresql/data
+    # The backend migrates on startup, so it must not connect before
+    # PostgreSQL is accepting connections.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-aletheia} -d ${POSTGRES_DB:-aletheia}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    image: ghcr.io/invictusrex/aletheia-backend:${ALETHEIA_VERSION:-latest}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-aletheia}:${POSTGRES_PASSWORD:-aletheia}@db:5432/${POSTGRES_DB:-aletheia}
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      ML_SERVICE_URL: http://ml:8001
+      # Optional: no key means the facts endpoints report unavailable
+      # with a clear reason. Nothing else is affected.
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
+      OCR_ENABLED: ${OCR_ENABLED:-true}
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
+      # Same-origin already, so this matters only if you point a client
+      # at the backend port directly.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      # Set to run the ML service on demand instead of continuously; see
+      # deploy/ml-supervisor.sh in the repository.
+      ML_WAKE_FILE: ${ML_WAKE_FILE:-}
+    volumes:
+      - ./run:/run/aletheia
+    depends_on:
+      db:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # OCR and embeddings. Holds its model weights resident, so it is the
+  # expensive container to leave running; it is never published and the
+  # frontend never addresses it.
+  ml:
+    image: ghcr.io/invictusrex/aletheia-ml:${ALETHEIA_VERSION:-latest}
+    restart: ${ML_RESTART:-unless-stopped}
+    environment:
+      OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
+      OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
+      EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+    expose:
+      - "8001"
+
+  frontend:
+    image: ghcr.io/invictusrex/aletheia-frontend:${ALETHEIA_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

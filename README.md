@@ -405,6 +405,26 @@ the *browser* can reach. `http://localhost:8000` is correct; `http://backend:800
 is not, because that name only resolves inside the Compose network and the
 request is made by the browser, not by the container.
 
+### From published images
+
+Published to GHCR, so neither a checkout nor a build is needed:
+
+```bash
+curl -O https://raw.githubusercontent.com/InvictusRex/Aletheia/main/docker-compose.ghcr.yml
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+| Image | Contents |
+|---|---|
+| `ghcr.io/invictusrex/aletheia-backend` | FastAPI, extraction, matching, migrations |
+| `ghcr.io/invictusrex/aletheia-frontend` | Next.js review UI |
+| `ghcr.io/invictusrex/aletheia-ml` | PaddleOCR and MiniLM |
+
+Tags are `latest` and the release version, pinnable with
+`ALETHEIA_VERSION=v1.0.0`. linux/amd64 only. The frontend image already
+resolves `/api` to the backend over the compose network, so the stack
+publishes exactly one port and makes no cross-origin request.
+
 ### Without Docker
 
 You still need PostgreSQL 16 with the pgvector extension reachable via
