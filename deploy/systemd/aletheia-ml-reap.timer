@@ -1,0 +1,12 @@
+[Unit]
+Description=Check whether the Aletheia ML container can be stopped
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=10min
+# The idle window is an hour; checking every ten minutes keeps the
+# overshoot small without waking the disk often.
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

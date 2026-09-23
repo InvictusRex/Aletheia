@@ -1,0 +1,7 @@
+[Unit]
+Description=Start the Aletheia ML container on demand
+
+[Service]
+Type=oneshot
+User=invictus
+ExecStart=/home/invictus/aletheia/deploy/ml-supervisor.sh wake

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.repositories import get_document_bundle, list_facts_for_document
 from app.db.session import get_db
 from app.facts.normalization import NormalizationReport, normalize_document_facts
+from app.ml.wake import mark_activity
 from app.facts.service import FactExtractionReport, extract_facts_for_document
 from app.models import Fact
 
@@ -36,6 +37,9 @@ def trigger_fact_extraction(
     chunk, so reruns skip already-completed chunks without duplicating
     facts.
     """
+    # A stage that is still running is not idle, so hold the ML
+    # service open even though this stage does not call it.
+    mark_activity()
     if get_document_bundle(db, document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     try:
@@ -74,6 +78,9 @@ def list_document_facts(
 def trigger_fact_normalization(
     document_id: UUID, db: Session = Depends(get_db)
 ) -> NormalizationReport:
+    # A stage that is still running is not idle, so hold the ML
+    # service open even though this stage does not call it.
+    mark_activity()
     if get_document_bundle(db, document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     try:

@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for Aletheia pipeline activity
+
+[Path]
+# The backend touches this when a document is uploaded or a stage runs.
+PathModified=/home/invictus/aletheia/run/ml.wanted
+
+[Install]
+WantedBy=multi-user.target

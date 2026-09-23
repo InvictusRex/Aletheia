@@ -45,6 +45,12 @@ services:
       OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
       # The web client calls this API from the browser.
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      # Set to enable on-demand ML: the backend touches this path, a host
+      # supervisor starts the container on change and stops it once the
+      # file goes stale. Unset means the container just runs.
+      ML_WAKE_FILE: ${ML_WAKE_FILE:-}
+    volumes:
+      - ./run:/run/aletheia
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:
@@ -59,7 +65,7 @@ services:
   # Compose network; it is NOT published publicly and the frontend never
   # talks to it. LLM inference stays on the Windows host (not in this image).
   ml:
-    restart: unless-stopped
+    restart: ${ML_RESTART:-unless-stopped}
     build:
       context: .
       dockerfile: ml-service/Dockerfile

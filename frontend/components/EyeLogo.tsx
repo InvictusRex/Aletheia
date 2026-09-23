@@ -1,5 +1,5 @@
 /**
- * Aletheia: the Greek word for truth as *disclosure* — what is no longer
+ * Aletheia: the Greek word for truth as *disclosure*, what is no longer
  * hidden. An open eye is the mark.
  *
  * The lid curves are cubic Béziers whose control points sit 70 units off

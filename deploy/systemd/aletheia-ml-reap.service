@@ -1,0 +1,7 @@
+[Unit]
+Description=Stop the Aletheia ML container once the pipeline is idle
+
+[Service]
+Type=oneshot
+User=invictus
+ExecStart=/home/invictus/aletheia/deploy/ml-supervisor.sh reap

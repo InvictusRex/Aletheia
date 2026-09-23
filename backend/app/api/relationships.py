@@ -19,6 +19,7 @@ from app.db.repositories import (
     list_relationships_for_document,
 )
 from app.db.session import get_db
+from app.ml.wake import mark_activity
 from app.matching.service import MatchingReport, run_matching_for_document
 from app.models import EvidenceUnit, Fact, Relationship
 
@@ -56,6 +57,9 @@ def trigger_matching(
         "silently rewrites a stored judgment",
     ),
 ) -> MatchingReport:
+    # A stage that is still running is not idle, so hold the ML
+    # service open even though this stage does not call it.
+    mark_activity()
     if get_document_bundle(db, document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     try:

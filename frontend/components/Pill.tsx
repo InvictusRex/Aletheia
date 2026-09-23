@@ -9,9 +9,9 @@ export function ComparabilityPill({ fact }: { fact: Fact }) {
   if (fact.comparability === "COMPARABLE") return <Pill tone="green">COMPARABLE</Pill>;
   const missing = fact.missing_for_comparison.join(", ");
   return fact.comparability === "PARTIAL" ? (
-    <Pill tone="accent">PARTIAL — no {missing}</Pill>
+    <Pill tone="accent">PARTIAL: no {missing}</Pill>
   ) : (
-    <Pill tone="red">NOT COMPARABLE — no {missing}</Pill>
+    <Pill tone="red">NOT COMPARABLE: no {missing}</Pill>
   );
 }
 
@@ -30,7 +30,7 @@ export function VerdictPill({ rel }: { rel: Relationship }) {
       <span className="text-xs text-muted">{(rel.confidence * 100).toFixed(0)}%</span>
       {withheld && (
         <span className="text-xs text-muted">
-          · {withheld} withheld — {reason ?? "precondition not met"}
+          · {withheld} withheld: {reason ?? "precondition not met"}
         </span>
       )}
     </span>

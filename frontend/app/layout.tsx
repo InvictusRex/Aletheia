@@ -4,7 +4,7 @@ import { Nav } from "@/components/Nav";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Aletheia — Fact Knowledge Layer",
+  title: "Aletheia",
   description:
     "Extracts facts from PDFs, grounds each in source evidence, and reconciles them across documents.",
   icons: { icon: "/eye.svg" },

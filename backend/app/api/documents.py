@@ -20,7 +20,10 @@ from app.db.repositories import (
 )
 from app.extraction.render import RenderError, render_page_png
 from app.db.session import get_db
+from app.core.config import settings
 from app.extraction.pipeline import run_ingestion
+from app.ml.client import MLServiceClient
+from app.ml.wake import wake_and_wait
 from app.models import Document, EvidenceUnit, Page
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -50,6 +53,13 @@ def ingest_document(
         raise HTTPException(status_code=413, detail="PDF exceeds 50 MB limit")
     if len(data) < 4 or data[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="uploaded file is not a PDF")
+
+    # A new document is the event that drives the ML pipeline, so the
+    # service is asked for here and ingestion waits for it. If it never
+    # arrives, native extraction still succeeds and only the OCR fallback
+    # is missing.
+    if settings.ocr_enabled:
+        wake_and_wait(MLServiceClient(base_url=settings.ml_service_url))
 
     document, pages, evidence = run_ingestion(file.filename or "upload.pdf", data)
     try:

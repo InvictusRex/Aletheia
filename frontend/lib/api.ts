@@ -90,7 +90,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<Result<T>> {
     }
     return [(await res.json()) as T, null];
   } catch (err) {
-    return [null, `API unreachable at ${API} — ${(err as Error).message}`];
+    return [null, `API unreachable at ${API}: ${(err as Error).message}`];
   }
 }
 
