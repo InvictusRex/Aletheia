@@ -226,3 +226,13 @@ def trigger_relationships(
         query = "&".join(f"compare_with={quote(str(d))}" for d in compare_with)
         path = f"{path}?{query}"
     return _post_pipeline_action(path, _RELATIONSHIPS_TIMEOUT)
+
+
+def page_image_url(
+    document_id: str, pdf_page_number: int, evidence_id: str | None = None
+) -> str:
+    """URL of a rendered page, with an evidence box highlighted."""
+    url = f"{get_base_url()}/documents/{quote(str(document_id))}/pages/{int(pdf_page_number)}/image"
+    if evidence_id:
+        url = f"{url}?evidence_id={quote(str(evidence_id))}"
+    return url

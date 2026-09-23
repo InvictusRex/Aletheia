@@ -8,6 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.models import (
+    DocumentFileRow,
     DocumentRow,
     EvidenceUnitRow,
     ExtractionChunkRow,
@@ -88,6 +89,24 @@ def save_ingestion(
     session.add_all(page_rows)
     session.add_all(evidence_rows)
     session.flush()
+
+
+def save_document_file(
+    session: Session, document_id: UUID, content: bytes
+) -> None:
+    """Store the uploaded PDF so its pages can be re-rendered later."""
+    session.merge(
+        DocumentFileRow(
+            document_id=document_id, content=content, byte_size=len(content)
+        )
+    )
+    session.flush()
+
+
+def get_document_file(session: Session, document_id: UUID) -> bytes | None:
+    """The stored PDF bytes, or None when the document predates storage."""
+    row = session.get(DocumentFileRow, document_id)
+    return row.content if row is not None else None
 
 
 def get_document_bundle(

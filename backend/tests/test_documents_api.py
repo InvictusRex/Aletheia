@@ -118,3 +118,77 @@ def test_ingest_route_is_sync_def():
     from app.api.documents import ingest_document
 
     assert not asyncio.iscoroutinefunction(ingest_document)
+
+
+def _tiny_pdf(pages: int = 2) -> bytes:
+    import pymupdf
+
+    doc = pymupdf.open()
+    try:
+        for index in range(pages):
+            page = doc.new_page()
+            page.insert_text((72, 72), f"Synthetic page {index} with neutral wording.")
+        return bytes(doc.tobytes())
+    finally:
+        doc.close()
+
+
+def _upload(api_client, data: bytes):
+    response = api_client.post(
+        "/documents", files={"file": ("probe.pdf", data, "application/pdf")}
+    )
+    assert response.status_code == 201
+    return response.json()["document"]["id"]
+
+
+def test_page_image_is_served_after_upload(api_client):
+    doc_id = _upload(api_client, _tiny_pdf())
+    response = api_client.get(f"/documents/{doc_id}/pages/0/image")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_page_image_highlights_a_real_evidence_unit(api_client):
+    doc_id = _upload(api_client, _tiny_pdf())
+    bundle = api_client.get(f"/documents/{doc_id}").json()
+    evidence = next(e for e in bundle["evidence"] if e.get("bbox"))
+    response = api_client.get(
+        f"/documents/{doc_id}/pages/{evidence['pdf_page_number']}/image",
+        params={"evidence_id": evidence["id"]},
+    )
+    assert response.status_code == 200
+    plain = api_client.get(
+        f"/documents/{doc_id}/pages/{evidence['pdf_page_number']}/image"
+    )
+    assert response.content != plain.content, "the box must actually be drawn"
+
+
+def test_evidence_on_another_page_is_rejected(api_client):
+    doc_id = _upload(api_client, _tiny_pdf())
+    bundle = api_client.get(f"/documents/{doc_id}").json()
+    evidence = next(e for e in bundle["evidence"] if e["pdf_page_number"] == 0)
+    response = api_client.get(
+        f"/documents/{doc_id}/pages/1/image", params={"evidence_id": evidence["id"]}
+    )
+    assert response.status_code == 400
+    assert "not on the requested page" in response.json()["detail"]
+
+
+def test_unknown_evidence_is_rejected(api_client):
+    import uuid as _uuid
+
+    doc_id = _upload(api_client, _tiny_pdf())
+    response = api_client.get(
+        f"/documents/{doc_id}/pages/0/image",
+        params={"evidence_id": str(_uuid.uuid4())},
+    )
+    assert response.status_code == 404
+
+
+def test_page_image_404s_for_an_unknown_document(api_client):
+    import uuid as _uuid
+
+    assert api_client.get(
+        f"/documents/{_uuid.uuid4()}/pages/0/image"
+    ).status_code == 404

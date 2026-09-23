@@ -6,11 +6,19 @@ persists the canonical evidence bundle. GET /documents/{id} inspects it.
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.repositories import get_document_bundle, list_documents, save_ingestion
+from app.db.repositories import (
+    get_document_bundle,
+    get_document_file,
+    list_documents,
+    save_document_file,
+    save_ingestion,
+)
+from app.extraction.render import RenderError, render_page_png
 from app.db.session import get_db
 from app.extraction.pipeline import run_ingestion
 from app.models import Document, EvidenceUnit, Page
@@ -46,6 +54,10 @@ def ingest_document(
     document, pages, evidence = run_ingestion(file.filename or "upload.pdf", data)
     try:
         save_ingestion(db, document, pages, evidence)
+        # Keep the PDF: a bounding box is only meaningful drawn on the
+        # page it came from, and the page cannot be re-rendered later
+        # without the original bytes.
+        save_document_file(db, document.id, data)
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -75,3 +87,45 @@ def get_document(document_id: UUID, db: Session = Depends(get_db)) -> DocumentBu
         raise HTTPException(status_code=404, detail="document not found")
     document, pages, evidence = bundle
     return DocumentBundle(document=document, pages=pages, evidence=evidence)
+
+
+@router.get("/{document_id}/pages/{pdf_page_number}/image")
+def get_page_image(
+    document_id: UUID,
+    pdf_page_number: int,
+    evidence_id: UUID | None = Query(
+        default=None, description="Highlight this evidence unit's bounding box"
+    ),
+    dpi: int = Query(default=110, ge=40, le=300),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Render one page as PNG, optionally with an evidence box drawn on it.
+
+    This is the last step of the provenance chain: fact -> evidence ->
+    page -> the exact rectangle the text was read from.
+    """
+    bundle = get_document_bundle(db, document_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    content = get_document_file(db, document_id)
+    if content is None:
+        raise HTTPException(
+            status_code=404,
+            detail="original PDF not stored for this document; re-upload to enable page rendering",
+        )
+    bbox = None
+    if evidence_id is not None:
+        match = next((e for e in bundle[2] if e.id == evidence_id), None)
+        if match is None:
+            raise HTTPException(status_code=404, detail="evidence not found")
+        if match.pdf_page_number != pdf_page_number:
+            raise HTTPException(
+                status_code=400,
+                detail="evidence is not on the requested page",
+            )
+        bbox = match.bbox
+    try:
+        png = render_page_png(content, pdf_page_number, bbox=bbox, dpi=dpi)
+    except RenderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=png, media_type="image/png")

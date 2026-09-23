@@ -958,6 +958,19 @@ def _render_fact_evidence(fact: dict, doc_name: str, evidence_by_id: dict) -> No
                             unsafe_allow_html=True)
                 continue
             bbox = ev.get("bbox")
+            if bbox:
+                try:
+                    st.image(
+                        api_client.page_image_url(
+                            str(fact.get("document_id")),
+                            int(ev.get("pdf_page_number", 0)),
+                            str(ev.get("id")),
+                        ),
+                        caption=f"{_page_label(ev)} — highlighted evidence",
+                        use_container_width=True,
+                    )
+                except Exception as exc:
+                    st.caption(f"Page image unavailable: {exc}")
             st.markdown(
                 f"<div class='ev'>{_esc(_page_label(ev))} · {_esc(ev.get('type', '?'))} · "
                 f"{_esc(ev.get('extraction_method', '?'))} · "

@@ -13,6 +13,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Boolean,
+    LargeBinary,
     Date,
     DateTime,
     Float,
@@ -59,6 +60,24 @@ class DocumentRow(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
+
+
+class DocumentFileRow(Base):
+    """The uploaded PDF itself, kept so pages can be re-rendered later.
+
+    Evidence carries a bounding box, but a box is only meaningful drawn
+    on the page it came from. Without the original bytes the provenance
+    trail stops at coordinates nobody can see. Stored in its own table
+    so the hot document row stays small.
+    """
+
+    __tablename__ = "document_files"
+
+    document_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class PageRow(Base):
