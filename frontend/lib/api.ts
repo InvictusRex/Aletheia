@@ -114,6 +114,10 @@ export const search = (query: string, documentId?: string, limit = 30) =>
     },
   );
 
+/** Stage 2. 503 when no LLM provider is configured, which the UI surfaces. */
+export const runExtraction = (id: string) =>
+  call<Record<string, any>>(`/documents/${id}/facts`, { method: "POST" });
+
 export const runNormalize = (id: string) =>
   call<Record<string, any>>(`/documents/${id}/normalize`, { method: "POST" });
 export const runRelationships = (id: string, recompute = false) =>

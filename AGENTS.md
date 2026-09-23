@@ -1,4 +1,4 @@
-# AGENTS.md — permanent working agreements (Aletheia repo)
+# AGENTS.md: permanent working agreements (Aletheia repo)
 
 Every agent and contributor working in this repository MUST follow these rules.
 They outrank one-off prompt instructions when in conflict, except explicit
@@ -52,7 +52,7 @@ user overrides for the current task.
 ## 6. Parallel work
 
 - When working alongside other agents, write ONLY to the file set
-  assigned to you. Never edit, move, or delete files outside it —
+  assigned to you. Never edit, move, or delete files outside it;
   report cross-cutting issues instead of fixing them yourself.
 
 ## 7. Database safety

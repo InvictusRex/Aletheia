@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Dots } from "@/components/Dots";
 import {
   health, listDocuments, listFacts, listRelationships,
-  runNormalize, runRelationships, uploadPdf, type Doc,
+  runExtraction, runNormalize, runRelationships, uploadPdf, type Doc,
 } from "@/lib/api";
 
 type Stats = { facts: number; comparable: number; relationships: number };
@@ -46,20 +46,23 @@ export default function Workspace() {
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const run = async (label: string, fn: () => Promise<unknown>) => {
+  const run = async (label: string, fn: () => Promise<string | null>) => {
     setBusy(label);
-    await fn();
+    const err = await fn();
     await refresh();
+    if (err) setError(err);
     setBusy(null);
   };
 
   const onUpload = async (files: FileList | null) => {
     if (!files?.length) return;
     await run("Uploading", async () => {
+      let failure: string | null = null;
       for (const file of Array.from(files)) {
         const [, err] = await uploadPdf(file);
-        if (err) setError(err);
+        failure ??= err;
       }
+      return failure;
     });
   };
 
@@ -102,7 +105,8 @@ export default function Workspace() {
           className="block w-full text-sm file:mr-3 file:rounded file:border file:border-[#3a3128] file:bg-transparent file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-foreground hover:file:border-accent"
         />
         <div className="mt-2 text-xs text-muted">
-          Database {db}. Ingestion extracts pages and evidence; facts are extracted on demand.
+          Database {db}. Upload extracts pages and evidence only. Then run
+          EXTRACT, NORMALIZE and MATCH on a document, in that order.
         </div>
       </div>
 
@@ -127,15 +131,34 @@ export default function Workspace() {
             <div className="flex gap-2">
               <button
                 disabled={busy !== null}
-                onClick={() => void run("Normalizing", () => runNormalize(doc.id))}
+                title="Read facts out of this document's evidence"
+                onClick={() =>
+                  void run("Extracting facts", async () => (await runExtraction(doc.id))[1])
+                }
+                className="rounded border border-[#3a3128] px-3 py-1.5 text-xs font-semibold tracking-wider hover:border-accent hover:text-accent disabled:opacity-40"
+              >
+                EXTRACT
+              </button>
+              <button
+                disabled={busy !== null || (s?.facts ?? 0) === 0}
+                title={(s?.facts ?? 0) === 0 ? "Extract facts first" : "Canonicalize units, scales and periods"}
+                onClick={() =>
+                  void run("Normalizing", async () => (await runNormalize(doc.id))[1])
+                }
                 className="rounded border border-[#3a3128] px-3 py-1.5 text-xs font-semibold tracking-wider hover:border-accent hover:text-accent disabled:opacity-40"
               >
                 NORMALIZE
               </button>
               <button
                 disabled={busy !== null || (s?.comparable ?? 0) === 0}
-                title={(s?.comparable ?? 0) === 0 ? "Normalize first — relationships compare normalized values" : ""}
-                onClick={() => void run("Matching", () => runRelationships(doc.id, true))}
+                title={
+                  (s?.comparable ?? 0) === 0
+                    ? "Normalize first: relationships compare normalized values"
+                    : "Discover and classify cross-document pairs"
+                }
+                onClick={() =>
+                  void run("Matching", async () => (await runRelationships(doc.id, true))[1])
+                }
                 className="rounded border border-[#3a3128] px-3 py-1.5 text-xs font-semibold tracking-wider hover:border-accent hover:text-accent disabled:opacity-40"
               >
                 MATCH
