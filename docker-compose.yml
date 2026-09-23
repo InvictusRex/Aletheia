@@ -1,5 +1,6 @@
 services:
   db:
+    restart: unless-stopped
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-aletheia}
@@ -8,7 +9,7 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ${PGDATA_PATH:-pgdata}:/var/lib/postgresql/data
     # The backend runs Alembic at startup, so it must not connect before
     # PostgreSQL accepts connections.
     healthcheck:
@@ -21,6 +22,7 @@ services:
       start_period: 10s
 
   backend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -57,6 +59,7 @@ services:
   # Compose network; it is NOT published publicly and the frontend never
   # talks to it. LLM inference stays on the Windows host (not in this image).
   ml:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: ml-service/Dockerfile
@@ -70,6 +73,7 @@ services:
   # Next.js workspace: the review UI. The browser calls the backend
   # directly, so nothing proxies through this container.
   frontend:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: frontend/Dockerfile
@@ -77,6 +81,10 @@ services:
         # Baked into the client bundle: the browser calls the published
         # host port directly, not the compose network name.
         NEXT_PUBLIC_ALETHEIA_API_URL: ${NEXT_PUBLIC_ALETHEIA_API_URL:-http://localhost:8000}
+        # Where the same-origin /api rewrite forwards to. Behind a proxy
+        # this is the compose hostname, because the frontend server makes
+        # that hop, not the browser.
+        ALETHEIA_API_URL: ${ALETHEIA_API_URL:-http://localhost:8000}
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     depends_on:

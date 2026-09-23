@@ -8,6 +8,10 @@ COPY frontend ./
 # the request is made by the browser, not by this container.
 ARG NEXT_PUBLIC_ALETHEIA_API_URL=http://localhost:8000
 ENV NEXT_PUBLIC_ALETHEIA_API_URL=$NEXT_PUBLIC_ALETHEIA_API_URL
+# Where the /api rewrite forwards to. Resolved into the build output, so
+# it is an argument here and not a runtime variable.
+ARG ALETHEIA_API_URL=http://localhost:8000
+ENV ALETHEIA_API_URL=$ALETHEIA_API_URL
 RUN npm run build
 
 FROM node:22-alpine
