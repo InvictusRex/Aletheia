@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  --background: #000000;
+  --foreground: #e8e8e8;
+  --card: #0b0b0b;
+  --panel: #111111;
+  --line: #202020;
+  --muted: #8a8a8a;
+  --accent: #e2a52c;
+  --accent-ink: #1a140d;
+  --green: #7fb069;
+  --red: #d1604d;
+  --radius: 4px;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-panel: var(--panel);
+  --color-line: var(--line);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-green: var(--green);
+  --color-red: var(--red);
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", monospace;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+}
+
+/* One shared surface: every panel, card and row uses it. */
+.surface {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  white-space: nowrap;
+}
+.pill-accent { color: var(--accent); border-color: var(--accent); }
+.pill-green  { color: var(--green);  border-color: var(--green); }
+.pill-red    { color: var(--red);    border-color: var(--red); }
+.pill-muted  { color: var(--muted); }
+
+.label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
