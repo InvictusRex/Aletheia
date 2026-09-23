@@ -41,6 +41,8 @@ services:
       OCR_PROVIDER: ${OCR_PROVIDER:-paddleocr}
       OCR_LANGUAGE: ${OCR_LANGUAGE:-en}
       OCR_ALLOW_MODEL_DOWNLOAD: ${OCR_ALLOW_MODEL_DOWNLOAD:-false}
+      # The web client calls this API from the browser.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:

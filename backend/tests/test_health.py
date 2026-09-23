@@ -56,3 +56,31 @@ def test_unreachable_database_fails_fast_instead_of_hanging():
     assert reachable is False
     assert detail
     assert elapsed < 15, f"connect probe took {elapsed:.1f}s; connect_timeout not applied"
+
+
+def test_browser_origin_gets_cors_headers():
+    """The web client fetches from the browser, so every call is
+    cross-origin. Without this the UI shows "Failed to fetch" and no
+    server-side log records anything wrong."""
+    from app.core.config import settings
+
+    client = TestClient(create_app())
+    origin = settings.cors_origins[0]
+    response = client.get("/health", headers={"Origin": origin})
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_preflight_is_answered_for_a_post_route():
+    from app.core.config import settings
+
+    client = TestClient(create_app())
+    response = client.options(
+        "/search",
+        headers={
+            "Origin": settings.cors_origins[0],
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert response.status_code == 200
+    assert "access-control-allow-origin" in response.headers

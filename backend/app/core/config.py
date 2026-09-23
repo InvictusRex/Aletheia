@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     ocr_allow_model_download: bool = Field(default=False)
     ocr_dpi: int = Field(default=200)
 
+    # Browser origins allowed to call this API. The web client fetches
+    # from the browser, so without this every request fails preflight;
+    # a server-rendered client never hit it. Comma-separated, or "*" to
+    # allow any origin (development only).
+    cors_allow_origins: str = Field(default="http://localhost:3000")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
     # Configurable dataset location; starter datasets live outside the repo.
     dataset_dir: str = Field(default="../starter-datasets")
 

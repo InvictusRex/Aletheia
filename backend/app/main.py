@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.documents import router as documents_router
 from app.api.facts import router as facts_router
@@ -19,6 +20,15 @@ logging.basicConfig(level=logging.INFO)
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name)
+    # The web client runs in the browser, so every call is cross-origin
+    # against the API's published port. Origins are configured rather
+    # than wildcarded by default.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.include_router(health_router)
     app.include_router(documents_router)
     app.include_router(facts_router)
